@@ -15,7 +15,12 @@ from performance_plot import run_performance
 from drawdown_plot import run_drawdown
 from correlation_plot import run_correlation
 from heatmap_script import run_heatmap
-from inflation_adjusted_plot import run_inflation_adjusted
+from inflation_adjusted_plot import (
+    run_inflation_adjusted,
+    compute_inflation_adjusted_df,
+    build_plotly_figure,
+    generate_matplotlib_plots,
+)
 from ratio_plot import run_ratio
 from distribution_plot import run_histogram, run_period_ranking, run_streaks
 import data_sources
@@ -40,6 +45,7 @@ tool = st.sidebar.selectbox(
         "Heatmap histórico",
         "Distribución (Histograma / Ranking / Rachas)",
         "Precio ajustado por inflación",
+        "Calculadora de Inflación Histórica",
         "Ratio entre activos",
     ],
 )
@@ -307,89 +313,10 @@ plot_style = {
 
 
 def build_inflation_adjusted_figure(ticker: str, start_year: int | None, source: str = "yfinance"):
-    cpi_ar = data_sources.cargar_cpi("AR")
-    cpi_us = data_sources.cargar_cpi("US")
-    is_arg = ticker.endswith(".BA")
-
-    if start_year:
-        start_date = datetime(start_year, 1, 1).date()
-    else:
-        start_date = datetime(2020, 1, 1).date() if is_arg else datetime(1900, 1, 1).date()
-
-    end_date = (datetime.now() + timedelta(days=2)).date()
-
-    price_df = data_sources.fetch_price_series(ticker, start_date, end_date, source=source)
-    if price_df.empty:
+    df = compute_inflation_adjusted_df(ticker, start_year, source)
+    if df is None or df.empty:
         return None
-
-    df = price_df.rename(columns={data_sources._var_name(ticker): "Close"})
-
-    cpi = cpi_ar if is_arg else cpi_us
-    if cpi.empty:
-        return None
-
-    df = df.join(cpi.to_frame("Cumulative_Inflation"), how="left")
-    df["Cumulative_Inflation"] = df["Cumulative_Inflation"].ffill().bfill()
-
-    last_cpi = df["Cumulative_Inflation"].iloc[-1]
-    df["Inflation_Adjusted_Close"] = df["Close"] * (last_cpi / df["Cumulative_Inflation"])
-
-    # === NEW ELEGANT FIGURE ===
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("Escala Lineal", "Escala Logarítmica"),
-        horizontal_spacing=0.08
-    )
-
-    line_style = dict(
-        color=PRIMARY_COLOR,
-        width=1.12,
-        shape='spline',
-        smoothing=1.0
-    )
-
-    # Adjusted lines
-    fig.add_trace(go.Scatter(x=df.index, y=df["Inflation_Adjusted_Close"],
-                             mode="lines", line=line_style, showlegend=False,
-                             hovertemplate="%{y:,.2f}<extra></extra>"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["Inflation_Adjusted_Close"],
-                             mode="lines", line=line_style, showlegend=False,
-                             hovertemplate="%{y:,.2f}<extra></extra>"), row=1, col=2)
-
-    # Subtle nominal line
-    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines",
-                             line=dict(color="#778899", width=0.75, dash="dot"),
-                             opacity=0.28, hovertemplate="Nominal: %{y:,.2f}<extra></extra>",
-                             showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines",
-                             line=dict(color="#778899", width=0.75, dash="dot"),
-                             opacity=0.28, hovertemplate="Nominal: %{y:,.2f}<extra></extra>",
-                             showlegend=False), row=1, col=2)
-
-    fig.update_layout(
-        title=dict(text=f"{ticker} – Precio Ajustado por Inflación", font=dict(size=28), x=0.5, xanchor="center"),
-        margin=dict(l=50, r=50, t=110, b=70),
-        height=800,
-        width=1800,
-        hovermode="x unified",
-        **plot_style
-    )
-
-    # Axes styling
-    fig.update_xaxes(gridcolor="rgba(90,90,120,0.25)", gridwidth=0.6, tickformat="%b %Y", row=1, col=1)
-    fig.update_xaxes(gridcolor="rgba(90,90,120,0.25)", gridwidth=0.6, tickformat="%b %Y", row=1, col=2)
-
-    fig.update_yaxes(title=dict(text="Precio Real", font=dict(color="#d0d0ff", size=14)),
-                     gridcolor="rgba(90,90,120,0.25)", gridwidth=0.6, tickfont=dict(color="#d0d0ff"), row=1, col=1)
-    fig.update_yaxes(type="log", title=dict(text="Precio (Log)", font=dict(color="#d0d0ff", size=14)),
-                     gridcolor="rgba(90,90,120,0.25)", gridwidth=0.6, tickfont=dict(color="#d0d0ff"), row=1, col=2)
-
-    # Watermark
-    fig.add_annotation(text="MTaurus – X: @MTaurus_ok", xref="paper", yref="paper",
-                       x=0.5, y=0.5, showarrow=False,
-                       font=dict(size=64, color="rgba(140,140,180,0.10)"))
-
-    return fig
+    return build_plotly_figure(df, ticker)
 from returns_evolution_plot import run_intraday_evolution
 # ---- Evolución de retornos ----
 # ---- Evolución de retornos ----
@@ -722,6 +649,141 @@ elif tool == "Precio ajustado por inflación":
             st.warning("No se pudo generar el gráfico (datos insuficientes o CPI vacío).")
         else:
             st.plotly_chart(fig, use_container_width=True)
+
+        path_lineal, path_log = generate_matplotlib_plots(
+            ticker.strip().upper(),
+            start_year=int(start_year) if start_year else None,
+            source=source,
+        )
+        if path_lineal and path_log:
+            st.markdown("**Versión Matplotlib (más liviana para celular):**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(path_lineal, width="stretch")
+            with col2:
+                st.image(path_log, width="stretch")
+
+
+# ---- Calculadora de Inflación Histórica ----
+elif tool == "Calculadora de Inflación Histórica":
+    st.subheader("Calculadora de precios por inflación (Argentina)")
+    st.markdown(
+        """
+Convertí el poder adquisitivo de un monto en pesos argentinos entre dos fechas,
+usando el IPC (INDEC) encadenado desde 1943 hasta hoy (con proyección hasta 2027).
+
+**¿Por qué funciona esto a pesar de los cambios de moneda?** Entre 1943 y hoy la
+Argentina cambió de signo monetario varias veces — *Peso Moneda Nacional* →
+*Peso Ley 18.188* → *Peso Argentino* → *Austral* → *Peso* (convertible) — con
+quitas de ceros en el medio (1970, 1983, 1985, 1992). El cálculo no usa el
+nombre de la moneda ni sus quitas de ceros: encadena la variación **porcentual**
+mes a mes del IPC, así que el resultado ya viene expresado en el poder
+adquisitivo equivalente de hoy, sin que vos tengas que aplicar ningún factor de
+conversión extra por la redenominación.
+        """
+    )
+
+    daily_cpi = data_sources.cargar_cpi("AR")
+    daily_moneda = data_sources.cargar_moneda_historica_ar()
+
+    if daily_cpi.empty:
+        st.error("No se pudo cargar el IPC de Argentina (ni remoto ni snapshot local).")
+    else:
+        min_date = daily_cpi.index.min().date()
+        max_date = daily_cpi.index.max().date()
+
+        def _moneda_de(fecha):
+            if daily_moneda.empty:
+                return None
+            ts = pd.to_datetime(fecha)
+            return daily_moneda.get(ts, None)
+
+        value_choice = st.radio(
+            "¿Querés ingresar el valor para la fecha de inicio o la fecha de fin?",
+            ("Fecha de Inicio", "Fecha de Fin"),
+            key="inflacion_calc_choice",
+        )
+
+        if value_choice == "Fecha de Inicio":
+            start_date = st.date_input(
+                "Selecciona la fecha de inicio:",
+                min_value=min_date, max_value=max_date, value=min_date,
+                key="inflacion_calc_start",
+            )
+            end_date = st.date_input(
+                "Selecciona la fecha de fin:",
+                min_value=min_date, max_value=max_date, value=max_date,
+                key="inflacion_calc_end",
+            )
+            start_value = st.number_input(
+                "Ingresa el valor en la fecha de inicio (en ARS):",
+                min_value=0.0, value=100.0, key="inflacion_calc_start_value",
+            )
+
+            try:
+                start_inflation = daily_cpi.loc[pd.to_datetime(start_date)]
+                end_inflation = daily_cpi.loc[pd.to_datetime(end_date)]
+                end_value = start_value * (end_inflation / start_inflation)
+
+                moneda_inicio = _moneda_de(start_date)
+                moneda_fin = _moneda_de(end_date)
+
+                st.write(
+                    f"Valor inicial el {start_date}: ARS {start_value:,.2f}"
+                    + (f" ({moneda_inicio})" if moneda_inicio else "")
+                )
+                st.write(
+                    f"Valor ajustado el {end_date}: ARS {end_value:,.2f}"
+                    + (f" ({moneda_fin})" if moneda_fin else "")
+                )
+                if moneda_inicio and moneda_fin and moneda_inicio != moneda_fin:
+                    st.info(
+                        f"Entre esas dos fechas la moneda de curso legal pasó de "
+                        f"'{moneda_inicio}' a '{moneda_fin}'. El resultado ya está "
+                        f"expresado en pesos de hoy — no hace falta ningún ajuste extra."
+                    )
+            except KeyError as e:
+                st.error(f"No hay datos de inflación para alguna de las fechas seleccionadas: {e}")
+        else:
+            start_date = st.date_input(
+                "Selecciona la fecha de inicio:",
+                min_value=min_date, max_value=max_date, value=min_date,
+                key="inflacion_calc_start2",
+            )
+            end_date = st.date_input(
+                "Selecciona la fecha de fin:",
+                min_value=start_date, max_value=max_date, value=max_date,
+                key="inflacion_calc_end2",
+            )
+            end_value = st.number_input(
+                "Ingresa el valor en la fecha de fin (en ARS):",
+                min_value=0.0, value=100.0, key="inflacion_calc_end_value",
+            )
+
+            try:
+                start_inflation = daily_cpi.loc[pd.to_datetime(start_date)]
+                end_inflation = daily_cpi.loc[pd.to_datetime(end_date)]
+                start_value = end_value / (end_inflation / start_inflation)
+
+                moneda_inicio = _moneda_de(start_date)
+                moneda_fin = _moneda_de(end_date)
+
+                st.write(
+                    f"Valor ajustado el {start_date}: ARS {start_value:,.2f}"
+                    + (f" ({moneda_inicio})" if moneda_inicio else "")
+                )
+                st.write(
+                    f"Valor final el {end_date}: ARS {end_value:,.2f}"
+                    + (f" ({moneda_fin})" if moneda_fin else "")
+                )
+                if moneda_inicio and moneda_fin and moneda_inicio != moneda_fin:
+                    st.info(
+                        f"Entre esas dos fechas la moneda de curso legal pasó de "
+                        f"'{moneda_inicio}' a '{moneda_fin}'. El resultado ya está "
+                        f"expresado en pesos de hoy — no hace falta ningún ajuste extra."
+                    )
+            except KeyError as e:
+                st.error(f"No hay datos de inflación para alguna de las fechas seleccionadas: {e}")
 
 
 # ---- Ratio entre activos ----
