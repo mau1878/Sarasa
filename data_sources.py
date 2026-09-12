@@ -431,6 +431,35 @@ def _parse_cpi_csv(raw):
 
 
 @cache_data(ttl=86400)
+def cargar_moneda_historica_ar():
+    """
+    Serie diaria (forward-fill) con el nombre de la moneda de curso legal
+    vigente en cada fecha en Argentina (columna 'Currency' del CSV de IPC AR:
+    Peso Moneda Nacional / Peso Ley 18.188 / Peso Argentino / Austral / Peso).
+    Con el mismo fallback remoto->local que cargar_cpi.
+    """
+    def _read(source):
+        df = pd.read_csv(source)
+        if 'Currency' not in df.columns:
+            return pd.Series(dtype=str)
+        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+        df = df.dropna(subset=['Date']).sort_values('Date').set_index('Date')
+        daily = df['Currency'].resample('D').ffill()
+        daily.index = pd.to_datetime(daily.index).tz_localize(None)
+        return daily
+
+    try:
+        return _read(CPI_AR_URL)
+    except Exception as e:
+        logger.warning(f"No se pudo bajar la serie de moneda histórica: {e}. Usando snapshot local.")
+        try:
+            return _read(CPI_AR_FALLBACK_PATH)
+        except Exception as e2:
+            logger.error(f"Tampoco se pudo leer el snapshot local de moneda: {e2}")
+            return pd.Series(dtype=str)
+
+
+@cache_data(ttl=86400)
 def cargar_cpi(pais='AR'):
     """
     Serie diaria de inflación acumulada (índice, no %) para 'AR' o 'US'.
