@@ -18,6 +18,7 @@ from heatmap_script import run_heatmap
 from inflation_adjusted_plot import run_inflation_adjusted
 from ratio_plot import run_ratio
 from distribution_plot import run_histogram, run_period_ranking, run_streaks
+import data_sources
 import plotly.io as pio
 import os
 import json
@@ -295,9 +296,6 @@ def build_ratio_figure(main_ticker, compare_ticker, source="yfinance", start_yea
 
     return fig
 
-URL_CPI_AR = "https://raw.githubusercontent.com/mau1878/Inflacion/refs/heads/main/inflaci%C3%B3nargentina2.csv"
-URL_CPI_US = "https://raw.githubusercontent.com/mau1878/Inflacion/refs/heads/main/inflaci%C3%B3nUSA.csv"
-
 PRIMARY_COLOR = "#40c0ff"
 
 plot_style = {
@@ -308,51 +306,23 @@ plot_style = {
 }
 
 
-@st.cache_data(show_spinner=False)
-def cargar_cpi_desde_github(url: str) -> pd.Series:
-    df = pd.read_csv(url)
-    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
-    df = df.dropna(subset=["Date"])
-    df.set_index("Date", inplace=True)
-    df["Cumulative_Inflation"] = (1 + df["CPI_MoM"]).cumprod()
-    daily = df["Cumulative_Inflation"].resample("D").ffill().interpolate("linear")
-    daily.index = pd.to_datetime(daily.index).tz_localize(None)
-    return daily
-
-
-@st.cache_data(show_spinner=False)
-def get_daily_cpi():
-    cpi_ar = cargar_cpi_desde_github(URL_CPI_AR)
-    cpi_us = cargar_cpi_desde_github(URL_CPI_US)
-    return cpi_ar, cpi_us
-
-
-def build_inflation_adjusted_figure(ticker: str, start_year: int | None):
-    cpi_ar, cpi_us = get_daily_cpi()
+def build_inflation_adjusted_figure(ticker: str, start_year: int | None, source: str = "yfinance"):
+    cpi_ar = data_sources.cargar_cpi("AR")
+    cpi_us = data_sources.cargar_cpi("US")
     is_arg = ticker.endswith(".BA")
-    
-    if start_year:
-        start_date = f"{start_year}-01-01"
-    else:
-        start_date = "2020-01-01" if is_arg else "1900-01-01"
-    
-    end_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
 
-    data = yf.download(ticker, start=start_date, end=end_date, progress=False)
-    if data.empty or "Close" not in data.columns:
+    if start_year:
+        start_date = datetime(start_year, 1, 1).date()
+    else:
+        start_date = datetime(2020, 1, 1).date() if is_arg else datetime(1900, 1, 1).date()
+
+    end_date = (datetime.now() + timedelta(days=2)).date()
+
+    price_df = data_sources.fetch_price_series(ticker, start_date, end_date, source=source)
+    if price_df.empty:
         return None
 
-    if isinstance(data.columns, pd.MultiIndex):
-        df = data["Close"][ticker].to_frame("Close")
-    else:
-        df = data[["Close"]].copy()
-
-    df = df.reset_index()
-    df["Date"] = pd.to_datetime(df["Date"])
-    df.set_index("Date", inplace=True)
-
-    # Optional: call your split adjustment if you want it here too
-    # df = ajustar_precios_por_splits(df, ticker)   # import if needed
+    df = price_df.rename(columns={data_sources._var_name(ticker): "Close"})
 
     cpi = cpi_ar if is_arg else cpi_us
     if cpi.empty:
@@ -740,11 +710,13 @@ elif tool == "Precio ajustado por inflación":
         max_value=2100,
         value=2000,
     )
+    source = st.selectbox("Fuente de datos", FUENTES_DATOS, index=0)
 
     if st.button("Generar gráfico"):
         fig = build_inflation_adjusted_figure(
             ticker.strip().upper(),
             int(start_year) if start_year else None,
+            source=source,
         )
         if fig is None:
             st.warning("No se pudo generar el gráfico (datos insuficientes o CPI vacío).")

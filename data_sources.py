@@ -58,6 +58,11 @@ MERVAL_HISTORICO_CUTOFF = pd.Timestamp("1996-10-08")  # primer día con datos de
 MERVAL_CCL_HISTORICO_PATH = os.path.join(DATA_DIR, "merval_ccl_historico.csv")
 MERVAL_CCL_HISTORICO_CUTOFF = pd.Timestamp("2003-03-24")  # desde acá manda YPFD.BA/YPF
 
+CPI_AR_URL = "https://raw.githubusercontent.com/mau1878/Inflacion/refs/heads/main/inflaci%C3%B3nargentina2.csv"
+CPI_US_URL = "https://raw.githubusercontent.com/mau1878/Inflacion/refs/heads/main/inflaci%C3%B3nUSA.csv"
+CPI_AR_FALLBACK_PATH = os.path.join(DATA_DIR, "cpi_argentina.csv")
+CPI_US_FALLBACK_PATH = os.path.join(DATA_DIR, "cpi_usa.csv")
+
 SPLITS = {
     'ADGO.BA': 1, 'ADBE.BA': 2, 'AEM.BA': 2, 'AMGN.BA': 3, 'AAPL.BA': 2, 'BAC.BA': 2,
     'GOLD.BA': 2, 'BIOX.BA': 2, 'CVX.BA': 2, 'LLY.BA': 7, 'XOM.BA': 2, 'FSLR.BA': 6,
@@ -410,3 +415,37 @@ def compute_yearly_changes(series):
     yearly_change = yearly_price.pct_change() * 100
     yearly_change.index = yearly_change.index.year
     return yearly_change
+
+
+# ===================== CPI / Inflación (con fallback local) =====================
+
+def _parse_cpi_csv(raw):
+    df = pd.read_csv(raw)
+    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df = df.sort_values('Date').set_index('Date')
+    df['Cumulative_Inflation'] = (1 + df['CPI_MoM']).cumprod()
+    daily = df['Cumulative_Inflation'].resample('D').ffill().interpolate(method='linear')
+    daily.index = pd.to_datetime(daily.index).tz_localize(None)
+    return daily
+
+
+@cache_data(ttl=86400)
+def cargar_cpi(pais='AR'):
+    """
+    Serie diaria de inflación acumulada (índice, no %) para 'AR' o 'US'.
+    Intenta bajar el CSV actualizado de GitHub; si falla (sin conexión, rate
+    limit, el repo se movió, etc.) usa el snapshot local en data/cpi_*.csv
+    como fallback, con una advertencia en el log.
+    """
+    url = CPI_AR_URL if pais == 'AR' else CPI_US_URL
+    fallback_path = CPI_AR_FALLBACK_PATH if pais == 'AR' else CPI_US_FALLBACK_PATH
+    try:
+        return _parse_cpi_csv(url)
+    except Exception as e:
+        logger.warning(f"No se pudo bajar el CPI de GitHub ({pais}): {e}. Usando snapshot local.")
+        try:
+            return _parse_cpi_csv(fallback_path)
+        except Exception as e2:
+            logger.error(f"Tampoco se pudo leer el snapshot local de CPI ({pais}): {e2}")
+            return pd.Series(dtype=float)
