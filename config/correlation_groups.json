@@ -1,0 +1,188 @@
+[
+  {
+    "id": "arg_all_adrs",
+    "title": "Argentina: Selección Completa ADRs",
+    "tickers": ["GGAL", "YPF", "PAM", "BMA", "VIST", "CEPU", "TGS", "BMA", "BBAR", "SUPV", "EDN", "CRESY", "LOMA", "TEO", "IRS"]
+  },
+  {
+    "id": "mags7",
+    "title": "Magnificent 7 (Big Tech)",
+    "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+  },
+  {
+    "id": "arg_banks",
+    "title": "Argentina: Sector Bancario",
+    "tickers": ["GGAL", "BMA", "BBAR", "SUPV"]
+  },
+  {
+    "id": "arg_energy",
+    "title": "Argentina: Energía y Oil & Gas",
+    "tickers": ["YPF", "PAMP", "TGS", "CEPU", "EDN", "VIST"]
+  },
+  {
+    "id": "arg_holding_real_estate",
+    "title": "Argentina: Telecomunicaciones & Real Estate",
+    "tickers": ["CRESY", "IRS", "LOMA", "TEO"]
+  },
+  {
+    "id": "latam_digital_growth",
+    "title": "LatAm Tech & Fintech (Growth)",
+    "tickers": ["MELI", "GLOB", "NU", "STNE", "PAGS", "DLO"]
+  },
+  {
+    "id": "agriculture_food",
+    "title": "Agroindustria y Alimentos",
+    "tickers": ["AGRO", "CRESY", "BIOX", "DE", "BG", "ADM", "MOS"]
+  },
+  {
+    "id": "brazil_blue_chips",
+    "title": "Brasil: selección de ADRs",
+    "tickers": ["PBR", "VALE", "ITUB", "BBD", "ERJ", "ABEV", "GGB", "SID", "PAGS", "STNE", "NU", "BAK"]
+  },
+  {
+    "id": "china_dragons",
+    "title": "China Tech & E-Commerce",
+    "tickers": ["BABA", "JD", "BIDU", "PDD", "NIO", "NTES", "TCEHY", "FXI"]
+  },
+  {
+    "id": "semiconductors_giants",
+    "title": "Semiconductores (Chips)",
+    "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU", "AMAT", "LRCX", "ARM"]
+  },
+  {
+    "id": "us_big_banks",
+    "title": "Bancos de EE.UU. (Wall Street)",
+    "tickers": ["JPM", "BAC", "WFC", "C", "GS", "MS", "USB", "BK"]
+  },
+  {
+    "id": "fintech_payments",
+    "title": "Fintech & Pagos Digitales",
+    "tickers": ["V", "MA", "PYPL", "AXP", "NU", "SQ", "COIN", "PAGS", "STNE"]
+  },
+  {
+    "id": "crypto_miners",
+    "title": "Crypto Miners & Proxies",
+    "tickers": ["COIN", "MSTR", "RIOT", "MARA", "BITF", "HUT", "IBIT", "CLSK"]
+  },
+  {
+    "id": "oil_supermajors",
+    "title": "Oil & Gas Global Majors",
+    "tickers": ["XOM", "CVX", "SHEL", "BP", "PBR", "VIST", "OXY", "SLB", "HAL"]
+  },
+  {
+    "id": "mining_diversified",
+    "title": "Minería Global Diversificada",
+    "tickers": ["VALE", "RIO", "BHP", "FCX", "SCCO", "AA", "TECK"]
+  },
+  {
+    "id": "gold_silver_miners",
+    "title": "Mineras de Oro y Plata",
+    "tickers": ["NEM", "GOLD", "HMY", "PAAS", "KGC", "GFI", "GLD", "SLV", "AUY"]
+  },
+  {
+    "id": "steel_industry",
+    "title": "Industria del Acero",
+    "tickers": ["X", "TX", "SID", "GGB", "MT", "NUE"]
+  },
+  {
+    "id": "uranium_nuclear",
+    "title": "Uranio y Energía Nuclear",
+    "tickers": ["URA", "CCJ", "NXE", "UUUU", "DNN", "OKLO", "CEG"]
+  },
+  {
+    "id": "oil_us_top10_marketcap",
+    "title": "Principales Empresas de Petróleo en EE.UU.",
+    "tickers": ["XOM", "CVX", "COP", "EOG", "OXY", "PSX", "VLO", "MPC", "KMI", "ET"]
+  },
+  {
+    "id": "automotive_race",
+    "title": "Automotrices: EV vs Tradicional",
+    "tickers": ["TSLA", "F", "GM", "TM", "HMC", "STLA", "RACE", "NIO", "XPEV"]
+  },
+  {
+    "id": "retail_titans",
+    "title": "Retail & Consumo Masivo",
+    "tickers": ["WMT", "COST", "TGT", "HD", "LOW", "MCD", "SBUX", "NKE"]
+  },
+  {
+    "id": "consumer_defensive",
+    "title": "Consumo Defensivo (Dividendos)",
+    "tickers": ["KO", "PEP", "PG", "CL", "MO", "PM", "KMB", "UL", "DEO"]
+  },
+  {
+    "id": "pharma_big",
+    "title": "Big Pharma & Salud",
+    "tickers": ["LLY", "JNJ", "PFE", "MRK", "ABBV", "BMY", "AMGN", "GILD", "UNH","MRNA"]
+  },
+  {
+    "id": "streaming_wars",
+    "title": "Streaming & Entretenimiento",
+    "tickers": ["NFLX", "DIS", "SPOT", "ROKU", "WBD", "PARA", "CMCSA"]
+  },
+  {
+    "id": "travel_airlines",
+    "title": "Turismo, Hoteles y Aerolíneas",
+    "tickers": ["BKNG", "ABNB", "DAL", "UAL", "AAL", "TRIP", "CCL", "RCL", "LVS"]
+  },
+  {
+    "id": "cloud_software",
+    "title": "Cloud Computing & SaaS",
+    "tickers": ["MSFT", "AMZN", "CRM", "NOW", "SNOW", "ADBE", "ORCL", "SAP", "DDOG"]
+  },
+  {
+    "id": "cyber_security",
+    "title": "Ciberseguridad",
+    "tickers": ["PANW", "CRWD", "FTNT", "CSCO", "OKTA", "NET", "CIBR"]
+  },
+  {
+    "id": "telecom_global",
+    "title": "Telecomunicaciones Globales",
+    "tickers": ["T", "VZ", "TMUS", "TEF", "VOD", "AMX", "TEO", "NOK", "ERIC"]
+  },
+  {
+    "id": "aerospace_defense",
+    "title": "Defensa y Aeroespacial",
+    "tickers": ["BA", "LMT", "RTX", "GE", "HON", "ITA", "EADSY"]
+  },
+  {
+    "id": "future_innovation",
+    "title": "Innovación Futura (AI/Space)",
+    "tickers": ["PLTR", "AI", "RKLB", "ASTS", "OKLO", "IONQ", "SPCE", "PATH", "SOUN","RGTI"]
+  },
+  {
+    "id": "etf_major_indices",
+    "title": "Índices de Mercado (ETFs)",
+    "tickers": ["SPY", "QQQ", "DIA", "IWM", "VTI", "VOO"]
+  },
+  {
+    "id": "etf_sectors_spdr",
+    "title": "Sectores S&P 500 (SPDRs)",
+    "tickers": ["XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLY", "XLC", "XLB", "XLU", "XLRE"]
+  },
+  {
+    "id": "etf_regional_global",
+    "title": "Mercados Regionales (ETFs)",
+    "tickers": ["EEM", "EFA", "VEA", "IEUR", "EWJ", "EWZ", "FXI", "ACWI"]
+  },
+  {
+    "id": "etf_factors",
+    "title": "Factores: Growth vs Value vs Dividend",
+    "tickers": ["SPY", "QQQ", "VIG", "VYM", "IWD", "IWF", "USMV", "MTUM"]
+  },
+  {
+    "id": "etf_volatility_hedges",
+    "title": "Volatilidad y Cobertura",
+    "tickers": ["SPY", "QQQ","VXX", "UVXY", "GLD", "TLT", "SH","PSQ"]
+  },
+
+  {
+    "id": "industrial_machinery",
+    "title": "Maquinaria e Industria Pesada",
+    "tickers": ["CAT", "DE", "HON", "GE", "MMM", "CMI", "PCAR"]
+  },
+  {
+    "id": "biotech_speculative",
+    "title": "Biotecnología (XBI Components)",
+    "tickers": ["XBI", "IBB", "MRNA", "VRTX", "REGN", "BNTX"]
+  }
+]
