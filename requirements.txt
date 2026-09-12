@@ -1,0 +1,14 @@
+streamlit
+yfinance
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+kaleido
+adjustText
+apscheduler
+python-dotenv
+pytz
+Pillow
+requests
