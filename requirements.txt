@@ -12,3 +12,4 @@ python-dotenv
 pytz
 Pillow
 requests
+num2words
