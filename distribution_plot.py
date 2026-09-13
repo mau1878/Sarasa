@@ -228,3 +228,167 @@ def run_streaks(ticker, start_year=None, source='yfinance', second_ticker=None,
             'signo': 'positiva' if current_sign else 'negativa'
         })
     return streaks
+
+
+def run_average_changes(ticker, start_year=None, source='yfinance', second_ticker=None,
+                         third_ticker=None, apply_ccl=False, analysis_period='Mes a Mes',
+                         metric='Promedio'):
+    """Barras de cambio Promedio o Mediana por mes/trimestre (verde/rojo)."""
+    series, ticker = _fetch_series(ticker, start_year, source, second_ticker, third_ticker, apply_ccl)
+    if series is None or series.empty:
+        return None
+
+    freq = 'ME' if analysis_period == 'Mes a Mes' else 'QE'
+    changes = data_sources.compute_period_changes(series, freq=freq).dropna()
+    if changes.empty:
+        return None
+
+    if analysis_period == 'Mes a Mes':
+        grp = changes.index.month
+        names = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+        lbl = 'Mes'
+    else:
+        grp = changes.index.quarter
+        names = ['Q1', 'Q2', 'Q3', 'Q4']
+        lbl = 'Trimestre'
+
+    if metric == 'Mediana':
+        agg = changes.groupby(grp).median()
+    else:
+        agg = changes.groupby(grp).mean()
+    agg = agg.reindex(range(1, len(names) + 1))
+    agg.index = names
+
+    fig, ax = plt.subplots(figsize=(10, 5.5), facecolor=PAPER_COLOR)
+    ax.set_facecolor(BG_COLOR)
+    colors_bar = [POS_COLOR if v >= 0 else NEG_COLOR for v in agg.values]
+    ax.bar(agg.index, agg.values, color=colors_bar, zorder=3)
+    ax.axhline(0, color=TEXT_COLOR, linewidth=1, alpha=0.5, zorder=2)
+
+    ax.set_title(f"{metric} por {lbl}: {_display_title(ticker, second_ticker, third_ticker, apply_ccl)}",
+                 fontsize=16, color=TEXT_COLOR, fontweight='bold', pad=16)
+    ax.set_ylabel(f"Variación {metric.lower()} (%)", fontsize=11, color=TEXT_COLOR, labelpad=8)
+    ax.grid(True, axis='y', color=GRID_COLOR, linestyle='--', linewidth=0.7)
+    ax.tick_params(axis='both', colors=TEXT_COLOR, labelsize=10)
+    for spine in ['top', 'right']:
+        ax.spines[spine].set_visible(False)
+    for spine in ['bottom', 'left']:
+        ax.spines[spine].set_color(TEXT_COLOR)
+
+    _add_watermark(fig)
+    plt.tight_layout()
+    os.makedirs("output", exist_ok=True)
+    filepath = os.path.join("output", f"avg_changes_{ticker.replace('.', '_')}.png")
+    plt.savefig(filepath, dpi=170, bbox_inches='tight', facecolor=PAPER_COLOR)
+    plt.close(fig)
+    return filepath
+
+
+def run_yearly_ranking(ticker, start_year=None, source='yfinance', second_ticker=None,
+                        third_ticker=None, apply_ccl=False, analysis_period='Mes a Mes'):
+    """Ranking anual (separado del embebido en heatmap/ranking mensual): cantidad
+    de meses/trimestres positivos vs negativos POR AÑO."""
+    series, ticker = _fetch_series(ticker, start_year, source, second_ticker, third_ticker, apply_ccl)
+    if series is None or series.empty:
+        return None
+
+    freq = 'ME' if analysis_period == 'Mes a Mes' else 'QE'
+    changes = data_sources.compute_period_changes(series, freq=freq).dropna()
+    if changes.empty:
+        return None
+
+    pos = changes.groupby(changes.index.year).apply(lambda x: (x > 0).sum())
+    neg = changes.groupby(changes.index.year).apply(lambda x: (x < 0).sum())
+    years = sorted(pos.index)
+
+    fig, ax = plt.subplots(figsize=(11, 6), facecolor=PAPER_COLOR)
+    ax.set_facecolor(BG_COLOR)
+    x = np.arange(len(years))
+    ax.bar(x - 0.2, [pos.get(y, 0) for y in years], 0.4, label='Positivos', color=POS_COLOR, zorder=3)
+    ax.bar(x + 0.2, [neg.get(y, 0) for y in years], 0.4, label='Negativos', color=NEG_COLOR, zorder=3)
+    ax.set_xticks(x)
+    ax.set_xticklabels(years, rotation=45, color=TEXT_COLOR)
+
+    freq_label = 'meses' if analysis_period == 'Mes a Mes' else 'trimestres'
+    ax.set_title(f"Ranking Anual ({freq_label} +/-): {_display_title(ticker, second_ticker, third_ticker, apply_ccl)}",
+                 fontsize=16, color=TEXT_COLOR, fontweight='bold', pad=16)
+    ax.set_ylabel(f"Cantidad de {freq_label}", fontsize=11, color=TEXT_COLOR, labelpad=8)
+    ax.grid(True, axis='y', color=GRID_COLOR, linestyle='--', linewidth=0.7)
+    ax.tick_params(axis='both', colors=TEXT_COLOR, labelsize=9)
+    for spine in ['top', 'right']:
+        ax.spines[spine].set_visible(False)
+    for spine in ['bottom', 'left']:
+        ax.spines[spine].set_color(TEXT_COLOR)
+    legend = ax.legend(loc='upper left', fontsize=10, framealpha=0.3)
+    for text in legend.get_texts():
+        text.set_color(TEXT_COLOR)
+
+    _add_watermark(fig)
+    plt.tight_layout()
+    os.makedirs("output", exist_ok=True)
+    filepath = os.path.join("output", f"yearly_ranking_{ticker.replace('.', '_')}.png")
+    plt.savefig(filepath, dpi=170, bbox_inches='tight', facecolor=PAPER_COLOR)
+    plt.close(fig)
+    return filepath
+
+
+def run_descriptive_stats(ticker, start_year=None, source='yfinance', second_ticker=None,
+                           third_ticker=None, apply_ccl=False, analysis_period='Mes a Mes'):
+    """Estadísticas descriptivas de las variaciones por período. Devuelve un
+    dict (no imagen) para mostrar con st.metric/st.columns: promedio, mediana,
+    máximo, mínimo, volatilidad (desvío estándar) y % de períodos positivos."""
+    series, ticker = _fetch_series(ticker, start_year, source, second_ticker, third_ticker, apply_ccl)
+    if series is None or series.empty:
+        return None
+
+    freq = 'ME' if analysis_period == 'Mes a Mes' else 'QE'
+    changes = data_sources.compute_period_changes(series, freq=freq).dropna()
+    if changes.empty:
+        return None
+
+    return {
+        "Promedio": f"{changes.mean():.2f}%",
+        "Mediana": f"{changes.median():.2f}%",
+        "Máximo": f"{changes.max():.2f}%",
+        "Mínimo": f"{changes.min():.2f}%",
+        "Volatilidad": f"{changes.std():.2f}%",
+        "% Positivos": f"{(changes > 0).mean() * 100:.1f}%",
+    }
+
+
+def run_period_line(ticker, start_year=None, source='yfinance', second_ticker=None,
+                     third_ticker=None, apply_ccl=False, analysis_period='Mes a Mes'):
+    """Serie de tiempo de la variación por período (línea), equivalente al
+    gráfico de líneas que encabezaba el análisis en el script original."""
+    series, ticker = _fetch_series(ticker, start_year, source, second_ticker, third_ticker, apply_ccl)
+    if series is None or series.empty:
+        return None
+
+    freq = 'ME' if analysis_period == 'Mes a Mes' else 'QE'
+    changes = data_sources.compute_period_changes(series, freq=freq).dropna()
+    if changes.empty:
+        return None
+
+    fig, ax = plt.subplots(figsize=(11, 5.5), facecolor=PAPER_COLOR)
+    ax.set_facecolor(BG_COLOR)
+    ax.plot(changes.index, changes.values, color='#40c0ff', linewidth=1.2, marker='o', markersize=2.5, zorder=3)
+    ax.axhline(0, color=TEXT_COLOR, linewidth=1, alpha=0.5, zorder=2)
+
+    freq_label = 'Mensuales' if analysis_period == 'Mes a Mes' else 'Trimestrales'
+    ax.set_title(f"Variaciones {freq_label}: {_display_title(ticker, second_ticker, third_ticker, apply_ccl)}",
+                 fontsize=16, color=TEXT_COLOR, fontweight='bold', pad=16)
+    ax.set_ylabel("Variación (%)", fontsize=11, color=TEXT_COLOR, labelpad=8)
+    ax.grid(True, color=GRID_COLOR, linestyle='--', linewidth=0.7)
+    ax.tick_params(axis='both', colors=TEXT_COLOR, labelsize=9)
+    for spine in ['top', 'right']:
+        ax.spines[spine].set_visible(False)
+    for spine in ['bottom', 'left']:
+        ax.spines[spine].set_color(TEXT_COLOR)
+
+    _add_watermark(fig)
+    plt.tight_layout()
+    os.makedirs("output", exist_ok=True)
+    filepath = os.path.join("output", f"period_line_{ticker.replace('.', '_')}.png")
+    plt.savefig(filepath, dpi=170, bbox_inches='tight', facecolor=PAPER_COLOR)
+    plt.close(fig)
+    return filepath

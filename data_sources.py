@@ -25,9 +25,16 @@ from pathlib import Path
 from datetime import datetime
 
 import pandas as pd
+import numpy as np
 import requests
 import urllib3
 import yfinance as yf
+
+try:
+    from num2words import num2words
+    _HAS_NUM2WORDS = True
+except ImportError:
+    _HAS_NUM2WORDS = False
 
 try:
     from curl_cffi import requests as cffi_requests
@@ -459,22 +466,228 @@ def cargar_moneda_historica_ar():
             return pd.Series(dtype=str)
 
 
+def _extrapolar_hasta_hoy(cpi_mensual, meses_promedio=3):
+    """
+    Recibe un DataFrame mensual con columna 'CPI_MoM' indexado por fecha.
+    Si el último dato real es de un mes anterior al actual, agrega filas
+    mensuales sintéticas hasta hoy usando el promedio de los últimos
+    `meses_promedio` meses reales. Devuelve (df_extendido, ultima_fecha_real).
+    """
+    cpi_mensual = cpi_mensual.sort_index()
+    ultima_fecha_real = cpi_mensual.index.max()
+    tasa_promedio = cpi_mensual['CPI_MoM'].tail(meses_promedio).mean()
+
+    hoy = pd.Timestamp(datetime.now().date())
+    if ultima_fecha_real >= hoy.to_period('M').to_timestamp():
+        return cpi_mensual, ultima_fecha_real
+
+    fechas_sinteticas = pd.date_range(
+        start=ultima_fecha_real + pd.offsets.MonthBegin(1), end=hoy, freq='MS'
+    )
+    if len(fechas_sinteticas) == 0:
+        return cpi_mensual, ultima_fecha_real
+
+    filas_sinteticas = pd.DataFrame(
+        {'CPI_MoM': [tasa_promedio] * len(fechas_sinteticas)}, index=fechas_sinteticas
+    )
+    cpi_extendido = pd.concat([cpi_mensual[['CPI_MoM']], filas_sinteticas])
+    return cpi_extendido[~cpi_extendido.index.duplicated(keep='first')], ultima_fecha_real
+
+
+def _construir_serie_diaria(cpi_mensual_extendido):
+    cpi = cpi_mensual_extendido.sort_index().copy()
+    cpi['Cumulative_Inflation'] = (1 + cpi['CPI_MoM']).cumprod()
+    hoy = pd.Timestamp(datetime.now().date())
+    if cpi.index.max() < hoy:
+        cpi.loc[hoy] = np.nan
+        cpi = cpi.sort_index()
+    daily = cpi['Cumulative_Inflation'].resample('D').interpolate(method='linear').ffill()
+    daily.index = pd.to_datetime(daily.index).tz_localize(None)
+    return daily
+
+
 @cache_data(ttl=86400)
 def cargar_cpi(pais='AR'):
     """
     Serie diaria de inflación acumulada (índice, no %) para 'AR' o 'US'.
-    Intenta bajar el CSV actualizado de GitHub; si falla (sin conexión, rate
-    limit, el repo se movió, etc.) usa el snapshot local en data/cpi_*.csv
-    como fallback, con una advertencia en el log.
+
+    Cascada de fuentes:
+    - AR: API argentinadatos.com (INDEC) -> se completa 2007-2016 con el CSV
+      curado (por la manipulación histórica del INDEC en ese tramo) -> si la
+      API falla directamente, CSV de GitHub -> snapshot local.
+    - US: FRED (serie CPIAUCSL, requiere FRED_API_KEY como variable de
+      entorno) -> se completa pre-1947 con el CSV (la serie de FRED no
+      empieza antes) -> si FRED falla, CSV de GitHub -> snapshot local.
+    En ambos casos, si el último dato real es de un mes anterior al actual,
+    se extrapola hasta hoy con el promedio de los últimos 3 meses reales.
+    Devuelve también, en el índice de retorno, hasta qué fecha el dato es
+    real (ver cargar_cpi_meta).
     """
-    url = CPI_AR_URL if pais == 'AR' else CPI_US_URL
-    fallback_path = CPI_AR_FALLBACK_PATH if pais == 'AR' else CPI_US_FALLBACK_PATH
     try:
-        return _parse_cpi_csv(url)
+        if pais == 'AR':
+            cpi_mensual = _cpi_ar_desde_api()
+        else:
+            cpi_mensual = _cpi_us_desde_fred()
+        cpi_extendido, ultima_fecha_real = _extrapolar_hasta_hoy(cpi_mensual)
+        _CPI_META[pais] = ultima_fecha_real
+        return _construir_serie_diaria(cpi_extendido)
     except Exception as e:
-        logger.warning(f"No se pudo bajar el CPI de GitHub ({pais}): {e}. Usando snapshot local.")
+        logger.warning(f"Fuente en vivo de CPI ({pais}) falló: {e}. Usando CSV de GitHub/snapshot local.")
         try:
-            return _parse_cpi_csv(fallback_path)
+            daily = _parse_cpi_csv(CPI_AR_URL if pais == 'AR' else CPI_US_URL)
         except Exception as e2:
-            logger.error(f"Tampoco se pudo leer el snapshot local de CPI ({pais}): {e2}")
-            return pd.Series(dtype=float)
+            logger.warning(f"CSV remoto de CPI ({pais}) también falló: {e2}. Usando snapshot local.")
+            try:
+                daily = _parse_cpi_csv(CPI_AR_FALLBACK_PATH if pais == 'AR' else CPI_US_FALLBACK_PATH)
+            except Exception as e3:
+                logger.error(f"Tampoco se pudo leer el snapshot local de CPI ({pais}): {e3}")
+                return pd.Series(dtype=float)
+        _CPI_META[pais] = daily.index.max()
+        return daily
+
+
+# Última fecha con dato REAL (no extrapolado) por país; se llena en cargar_cpi.
+_CPI_META = {}
+
+
+def cpi_ultima_fecha_real(pais='AR'):
+    """Última fecha con dato oficial real (no extrapolado) cargada por cargar_cpi(pais)."""
+    return _CPI_META.get(pais)
+
+
+def _cpi_ar_desde_api():
+    url = "https://api.argentinadatos.com/v1/finanzas/indices/inflacion"
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    df = pd.DataFrame(r.json()).rename(columns={"fecha": "Date", "valor": "CPI_MoM_pct"})
+    df["Date"] = pd.to_datetime(df["Date"])
+    df["CPI_MoM"] = df["CPI_MoM_pct"] / 100.0
+    df = df.set_index("Date")[["CPI_MoM"]]
+
+    # 2007-2016: se prefiere el CSV curado por la manipulación histórica del INDEC.
+    try:
+        csv = pd.read_csv(CPI_AR_URL)
+        csv['Date'] = pd.to_datetime(csv['Date'], dayfirst=True, errors='coerce')
+        csv = csv.dropna(subset=['Date']).set_index('Date')[['CPI_MoM']]
+        mask_api = (df.index >= '2007-01-01') & (df.index <= '2016-12-31')
+        df = df[~mask_api]
+        mask_csv = (csv.index >= '2007-01-01') & (csv.index <= '2016-12-31')
+        df = pd.concat([df, csv[mask_csv]]).sort_index()
+        df = df[~df.index.duplicated(keep='last')]
+    except Exception as e:
+        logger.warning(f"No se pudo aplicar el CSV curado 2007-2016 ({e}). Usando solo API.")
+    return df
+
+
+def _cpi_us_desde_fred():
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("FRED_API_KEY")
+        except Exception:
+            api_key = None
+    if not api_key:
+        raise ValueError("Falta FRED_API_KEY (variable de entorno o st.secrets).")
+
+    r = requests.get(
+        "https://api.stlouisfed.org/fred/series/observations",
+        params={"series_id": "CPIAUCSL", "api_key": api_key, "file_type": "json"},
+        timeout=15,
+    )
+    r.raise_for_status()
+    df = pd.DataFrame(r.json()["observations"])[["date", "value"]]
+    df = df.rename(columns={"date": "Date", "value": "CPI_Level"})
+    df["Date"] = pd.to_datetime(df["Date"])
+    df["CPI_Level"] = pd.to_numeric(df["CPI_Level"], errors="coerce")
+    df = df.dropna(subset=["CPI_Level"]).set_index("Date").sort_index()
+    df["CPI_MoM"] = df["CPI_Level"].pct_change()
+    df = df.dropna(subset=["CPI_MoM"])[["CPI_MoM"]]
+
+    # FRED (CPIAUCSL) arranca en 1947; se completa 1913-1946 con el CSV.
+    try:
+        csv = pd.read_csv(CPI_US_URL)
+        csv['Date'] = pd.to_datetime(csv['Date'], dayfirst=True, errors='coerce')
+        csv = csv.dropna(subset=['Date']).set_index('Date')[['CPI_MoM']]
+        csv_pre = csv[csv.index < df.index.min()]
+        df = pd.concat([csv_pre, df]).sort_index()
+        df = df[~df.index.duplicated(keep='last')]
+    except Exception as e:
+        logger.warning(f"No se pudo completar el CPI de EE.UU. con el CSV pre-1947 ({e}). Usando solo FRED.")
+    return df
+
+
+# ===================== Redenominaciones de la moneda argentina =====================
+# (fecha desde la que rige, ceros que se le sacaron a la moneda anterior, nombre)
+REDENOMINATIONS = [
+    (datetime(1970, 1, 1), 2, 'Peso Ley 18.188'),
+    (datetime(1983, 6, 1), 4, 'Peso Argentino'),
+    (datetime(1985, 6, 15), 3, 'Austral'),
+    (datetime(1992, 1, 1), 4, 'Peso'),
+]
+
+
+def get_currency(fecha):
+    """Nombre de la moneda de curso legal vigente en `fecha` (datetime)."""
+    for change_date, _, currency in reversed(REDENOMINATIONS):
+        if fecha >= change_date:
+            return currency
+    return 'Peso Moneda Nacional'
+
+
+def to_current_peso(amount, fecha):
+    """Convierte un monto en la moneda vigente en `fecha` a Pesos actuales
+    (solo quita de ceros por redenominación, sin inflación)."""
+    for change_date, zeroes, _ in REDENOMINATIONS:
+        if fecha < change_date:
+            amount /= 10 ** zeroes
+    return amount
+
+
+def from_current_peso(amount, fecha):
+    """Convierte Pesos actuales a la moneda vigente en `fecha` (sin inflación)."""
+    for change_date, zeroes, _ in reversed(REDENOMINATIONS):
+        if fecha < change_date:
+            amount *= 10 ** zeroes
+    return amount
+
+
+def format_arg_amount(amount, decimals=2):
+    """Formatea un monto con separador de miles '.' y decimal ',' (estilo
+    argentino). Si el valor es muy chico, agrega también notación científica."""
+    if abs(amount) < 1e-6 and amount != 0:
+        formatted_normal = f"{amount:,.12f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        formatted_scientific = f"{amount:.8e}".replace("e", "×10^")
+        return formatted_normal, formatted_scientific
+    formatted_normal = f"{amount:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return formatted_normal, None
+
+
+def amount_to_words(amount, currency, decimals=2):
+    """Escribe el monto en palabras (español), con centavos si corresponde.
+    Requiere el paquete num2words; si no está instalado, devuelve un aviso."""
+    if not _HAS_NUM2WORDS:
+        return "(instalá el paquete 'num2words' para ver el monto en palabras)"
+    if abs(amount) < 1e-6 and amount != 0:
+        formatted_normal, _ = format_arg_amount(amount, 12)
+        return f"Valor muy pequeño: {formatted_normal} {currency}"
+
+    entero = int(round(amount))
+    decimales = int(round((amount - entero) * (10 ** decimals)))
+
+    try:
+        word_part = num2words(entero, lang='es').capitalize()
+    except OverflowError:
+        try:
+            word_part = num2words(entero, lang='en').capitalize() + " (en inglés)"
+        except OverflowError:
+            formatted_normal, _ = format_arg_amount(amount, decimals)
+            return f"Valor demasiado grande para expresar en palabras: {formatted_normal} {currency}"
+
+    if decimales > 0:
+        try:
+            decimal_words = num2words(decimales, lang='es').capitalize()
+        except OverflowError:
+            decimal_words = num2words(decimales, lang='en').capitalize() + " (en inglés)"
+        return f"{word_part} {currency} con {decimal_words} centavos"
+    return f"{word_part} {currency}"
