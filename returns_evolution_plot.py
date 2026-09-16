@@ -182,6 +182,10 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     print(f"DEBUG: Datos intraday para {len(df)} minutos, tickers: {list(df.columns)}")
     print(f"DEBUG: Rango de tiempo: {df.index[0]} → {df.index[-1]}")
 
+    # Parseamos la ventana horaria acá arriba porque el baseline "window" la necesita
+    start_t = _parse_time_arg(start_time)
+    end_t = _parse_time_arg(end_time)
+
     returns = pd.DataFrame(index=df.index)
     late_starters = []
 
@@ -203,6 +207,22 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                 late_starters.append(col)
             title_base = "desde Apertura"
             print(f"DEBUG: {col} (Apertura) base = {ticker_base:.4f} at {series.index[0]}")
+        elif baseline == "window":
+            window_series = series
+            if start_t is not None:
+                window_series = window_series[window_series.index.time >= start_t]
+            if end_t is not None:
+                window_series = window_series[window_series.index.time <= end_t]
+            if not window_series.empty:
+                ticker_base = float(window_series.iloc[0])
+                base_time = window_series.index[0]
+            else:
+                # El ticker no tiene datos dentro de la ventana elegida: usamos su primer dato disponible
+                ticker_base = float(series.iloc[0])
+                base_time = series.index[0]
+                late_starters.append(col)
+            title_base = "desde Apertura de la Ventana"
+            print(f"DEBUG: {col} (Ventana) base = {ticker_base:.4f} at {base_time}")
         else:
             # Cierre anterior
             target_date = series.index[0].date()
@@ -238,10 +258,10 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     if late_starters and baseline == "open":
         title_base = "desde Apertura (algunos tickers empezaron tarde)"
+    if late_starters and baseline == "window":
+        title_base = "desde Apertura de la Ventana (algunos tickers empezaron tarde)"
 
     # === Ventana horaria opcional (recorta lo que se muestra en el gráfico) ===
-    start_t = _parse_time_arg(start_time)
-    end_t = _parse_time_arg(end_time)
     if start_t is not None or end_t is not None:
         idx_times = returns.index.time
         mask = np.ones(len(returns), dtype=bool)
