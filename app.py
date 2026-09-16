@@ -499,7 +499,11 @@ elif tool == "Intradía":
             max_value=datetime.now().date()
         )
     with col2:
-        baseline = st.radio("Baseline", ["Apertura del día", "Cierre anterior"], horizontal=True)
+        baseline = st.radio(
+            "Baseline",
+            ["Apertura del día", "Cierre anterior", "Apertura de la ventana de tiempo"],
+            horizontal=True
+        )
     
     group_name = st.text_input("Nombre del grupo (si manual)", "Activos")
     custom_title = st.text_input("Título personalizado (opcional)", "")
@@ -507,7 +511,11 @@ elif tool == "Intradía":
     smooth = st.checkbox("Suavizar curvas", True)
 
     # === NEW: ventana horaria opcional para recortar lo que se muestra ===
-    limit_time_window = st.checkbox("Restringir horario mostrado en el gráfico", False)
+    if baseline == "Apertura de la ventana de tiempo":
+        st.caption("Con este baseline, definí abajo la ventana horaria: la variación se calcula desde el primer dato de cada ticker dentro de ese rango.")
+        limit_time_window = True
+    else:
+        limit_time_window = st.checkbox("Restringir horario mostrado en el gráfico", False)
     start_time_val = None
     end_time_val = None
     if limit_time_window:
@@ -559,7 +567,11 @@ elif tool == "Intradía":
                 custom_title=custom_title or None,
                 max_lines=max_lines,
                 smooth=smooth,
-                baseline="open" if baseline == "Apertura del día" else "close",
+                baseline=(
+                    "open" if baseline == "Apertura del día"
+                    else "close" if baseline == "Cierre anterior"
+                    else "window"
+                ),
                 target_date=selected_date,        # ← NEW
                 start_time=start_time_val,        # ← NEW
                 end_time=end_time_val,             # ← NEW
