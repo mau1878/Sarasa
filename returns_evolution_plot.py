@@ -327,7 +327,14 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     # === Líneas verticales de referencia (sutiles, opcionales) ===
     if ref_times:
-        y_top = ax.get_ylim()[1]
+        y_bottom, y_top = ax.get_ylim()
+        y_range = y_top - y_bottom
+        n_ref = len(ref_times)
+        # Menos líneas de referencia → texto más grande, sin que se amontonen
+        ref_fontsize = float(np.clip(12 - 0.6 * max(n_ref - 1, 0), 8, 12))
+        window = max(3, n_points // 20)
+        ref_texts = []
+
         for item in ref_times:
             if isinstance(item, (tuple, list)) and len(item) == 2:
                 t_raw, ref_label = item
@@ -345,9 +352,43 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                 continue
             idx = _nearest_index_for_time(returns.index, t_obj)
             ax.axvline(x=idx, color='#9090b0', linestyle=':', linewidth=1.0, alpha=0.35, zorder=1)
-            if ref_label:
-                ax.text(idx, y_top * 0.97, ref_label, rotation=90, va='top', ha='right',
-                        fontsize=8, color='#9090b0', alpha=0.65, zorder=1)
+            if not ref_label:
+                continue
+
+            # Miramos las líneas de precio cerca de esta marca para decidir si conviene
+            # poner el texto arriba (si hay hueco libre hacia el techo) o abajo (si no lo hay).
+            start_w = max(0, idx - window)
+            end_w = min(n_points, idx + window + 1)
+            local_vals = returns.iloc[start_w:end_w].values
+            local_max = np.nanmax(local_vals) if end_w > start_w else y_top
+            local_min = np.nanmin(local_vals) if end_w > start_w else y_bottom
+            if not np.isfinite(local_max):
+                local_max = y_top
+            if not np.isfinite(local_min):
+                local_min = y_bottom
+
+            space_above = y_top - local_max
+            space_below = local_min - y_bottom
+
+            if space_above >= space_below:
+                y_pos = min(local_max + y_range * 0.05, y_top - y_range * 0.02)
+                va = 'bottom'
+            else:
+                y_pos = max(local_min - y_range * 0.05, y_bottom + y_range * 0.02)
+                va = 'top'
+
+            txt = ax.text(idx, y_pos, ref_label, rotation=90, va=va, ha='center',
+                          fontsize=ref_fontsize, color='#a0a0cc', fontweight='bold',
+                          alpha=0.85, zorder=2,
+                          bbox=dict(facecolor=BG_COLOR, alpha=0.6, edgecolor='none', pad=1.5))
+            ref_texts.append(txt)
+
+        if ref_texts:
+            try:
+                adjust_text(ref_texts, ax=ax, only_move={'texts': 'y'},
+                            expand_text=(1.1, 1.3), force_text=(0.1, 1.0))
+            except Exception:
+                pass
 
     label_x_pos = n_points + (n_points * 0.05)
     texts = []
