@@ -351,6 +351,10 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     label_x_pos = n_points + (n_points * 0.05)
     texts = []
+    n_visible_labels = int(np.sum([np.isfinite(returns[t].iloc[-1]) for t in returns.columns]))
+    # Cuantos menos tickers hay que etiquetar, más grande puede ser la fuente sin que se pisen
+    label_fontsize = float(np.clip(14 - 0.28 * max(n_visible_labels - 1, 0), 8, 14))
+
     for i, ticker in enumerate(returns.columns):
         val = returns[ticker].iloc[-1]
         if not np.isfinite(val):
@@ -360,9 +364,10 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         color = LINE_COLORS[i % len(LINE_COLORS)]
         txt = ax.text(label_x_pos, val,
                       f" {ticker} ({val:+.2f}%)",
-                      color=color, fontsize=10, fontweight='bold',
+                      color=color, fontsize=label_fontsize, fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
+        txt.set_gid(ticker)
         texts.append(txt)
 
     try:
@@ -370,6 +375,24 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                     expand_text=(1.2, 2.2), force_text=(0, 2.5))
     except Exception:
         pass
+
+    # Flecha sutil que conecta cada etiqueta (ya reubicada arriba/abajo por adjust_text)
+    # con el punto real donde termina su línea, para que no haya ambigüedad.
+    for txt in texts:
+        ticker = txt.get_gid()
+        if ticker not in line_ends:
+            continue
+        target_x, target_y = line_ends[ticker]
+        if not np.isfinite(target_y):
+            continue
+        label_x, label_y = txt.get_position()
+        color = txt.get_color()
+        ax.annotate('',
+                    xy=(target_x, target_y),
+                    xytext=(label_x - 0.5, label_y),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8, alpha=0.4,
+                                     shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
+                    zorder=3)
 
     if n_points > 10:
         start_tick = returns.index[0]
