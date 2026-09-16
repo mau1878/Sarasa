@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from scipy.interpolate import make_interp_spline
 from adjustText import adjust_text
 import os
@@ -127,15 +127,46 @@ def fetch_intraday_data(tickers, target_date=None):
     return data
 
 
+def _parse_time_arg(value):
+    """Acepta None, un datetime.time, o un string 'HH:MM' / 'HH:MM:SS'. Devuelve datetime.time o None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dtime):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                continue
+        raise ValueError(f"Formato de hora inválido: {value!r}. Usá HH:MM.")
+    raise TypeError(f"Tipo de hora no soportado: {type(value)}")
+
+
+def _nearest_index_for_time(index, t):
+    """Encuentra la posición entera más cercana a la hora `t` dentro de un DatetimeIndex."""
+    ref_ts = pd.Timestamp.combine(index[0].date(), t)
+    if index.tz is not None:
+        ref_ts = ref_ts.tz_localize(index.tz)
+    deltas = np.abs((index - ref_ts).total_seconds())
+    return int(np.argmin(deltas))
+
+
 def run_intraday_evolution(tickers, group_name="Activos", custom_title=None,
-                          max_lines=15, smooth=True, baseline="open", target_date=None):
+                          max_lines=15, smooth=True, baseline="open", target_date=None,
+                          start_time=None, end_time=None, ref_times=None):
     df = fetch_intraday_data(tickers, target_date)
     if df.empty:
         return None
-    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline)
+    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline,
+                                    start_time=start_time, end_time=end_time, ref_times=ref_times)
 
 
-def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open"):
+def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open",
+                             start_time=None, end_time=None, ref_times=None):
     if df.empty or len(df) < 5:
         print("DEBUG: df intraday vacío o muy pequeño")
         return None
@@ -208,6 +239,28 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     if late_starters and baseline == "open":
         title_base = "desde Apertura (algunos tickers empezaron tarde)"
 
+    # === Ventana horaria opcional (recorta lo que se muestra en el gráfico) ===
+    start_t = _parse_time_arg(start_time)
+    end_t = _parse_time_arg(end_time)
+    if start_t is not None or end_t is not None:
+        idx_times = returns.index.time
+        mask = np.ones(len(returns), dtype=bool)
+        if start_t is not None:
+            mask &= (idx_times >= start_t)
+        if end_t is not None:
+            mask &= (idx_times <= end_t)
+        if mask.any():
+            returns = returns.loc[mask]
+        else:
+            print(f"DEBUG: la ventana horaria {start_time}-{end_time} no contiene datos, se ignora el filtro")
+
+    # === Bulletproofing: rellenamos huecos para que ninguna línea/etiqueta se pierda por NaN ===
+    returns = returns.ffill()
+    returns = returns.dropna(axis=1, how='all')
+    if returns.empty or returns.shape[1] == 0:
+        print("DEBUG: returns quedó vacío después del recorte de horario / ffill.")
+        return None
+
     # Limit & sort
     final_returns = returns.iloc[-1].dropna()
     if len(returns.columns) > max_lines:
@@ -231,13 +284,13 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         y = returns[ticker].values
         line_ends[ticker] = (n_points - 1, y[-1])
 
-        if smooth and n_points > 4:
+        if smooth and n_points > 4 and np.all(np.isfinite(y)):
             try:
                 spline = make_interp_spline(x_numeric, y, k=2)
                 x_s = np.linspace(0, n_points-1, 400)
                 y_s = spline(x_s)
                 ax.plot(x_s, y_s, color=color, linewidth=2.2, alpha=0.9)
-            except:
+            except Exception:
                 ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9)
         else:
             ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9)
@@ -252,12 +305,41 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     ax.fill_between([-0.5, n_points*2], 0, y_max+100, color='green', alpha=0.02)
     ax.fill_between([-0.5, n_points*2], 0, y_min-100, color='red', alpha=0.02)
 
-    label_x_pos = n_points + (n_points * 0.04)
+    # === Líneas verticales de referencia (sutiles, opcionales) ===
+    if ref_times:
+        y_top = ax.get_ylim()[1]
+        for item in ref_times:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                t_raw, ref_label = item
+            elif isinstance(item, str) and "|" in item:
+                t_raw, ref_label = item.split("|", 1)
+                ref_label = ref_label.strip()
+            else:
+                t_raw, ref_label = item, None
+            try:
+                t_obj = _parse_time_arg(t_raw)
+            except Exception:
+                print(f"DEBUG: hora de referencia inválida, se ignora: {t_raw!r}")
+                continue
+            if t_obj is None:
+                continue
+            idx = _nearest_index_for_time(returns.index, t_obj)
+            ax.axvline(x=idx, color='#9090b0', linestyle=':', linewidth=1.0, alpha=0.35, zorder=1)
+            if ref_label:
+                ax.text(idx, y_top * 0.97, ref_label, rotation=90, va='top', ha='right',
+                        fontsize=8, color='#9090b0', alpha=0.65, zorder=1)
+
+    label_x_pos = n_points + (n_points * 0.05)
     texts = []
     for i, ticker in enumerate(returns.columns):
+        val = returns[ticker].iloc[-1]
+        if not np.isfinite(val):
+            # No dejamos que un ticker sin valor final válido rompa el layout de las demás etiquetas
+            print(f"DEBUG: {ticker} sin valor final válido, se omite su etiqueta")
+            continue
         color = LINE_COLORS[i % len(LINE_COLORS)]
-        txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
-                      f" {ticker} ({returns[ticker].iloc[-1]:+.2f}%)",
+        txt = ax.text(label_x_pos, val,
+                      f" {ticker} ({val:+.2f}%)",
                       color=color, fontsize=10, fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
@@ -266,13 +348,13 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     try:
         adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
                     expand_text=(1.2, 2.2), force_text=(0, 2.5))
-    except:
+    except Exception:
         pass
 
     if n_points > 10:
-        start_time = returns.index[0]
-        end_time = returns.index[-1]
-        tick_times = pd.date_range(start=start_time.floor('30min'), end=end_time.ceil('30min'), freq='30min')
+        start_tick = returns.index[0]
+        end_tick = returns.index[-1]
+        tick_times = pd.date_range(start=start_tick.floor('30min'), end=end_tick.ceil('30min'), freq='30min')
         tick_locs = []
         tick_labels = []
         for t in tick_times:
@@ -287,7 +369,7 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         ax.set_xticks(range(0, n_points, max(1, n_points//8)))
         ax.set_xticklabels([returns.index[i].strftime('%H:%M') for i in ax.get_xticks()], rotation=45, ha='right')
 
-    ax.set_xlim(-0.5, n_points * 1.08)
+    ax.set_xlim(-0.5, n_points * 1.30)
     ax.grid(True, color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
 
     title = custom_title or group_name
@@ -303,13 +385,6 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     plt.close(fig)
     return output_path
 
-
-def run_intraday_evolution(tickers, group_name="Activos", custom_title=None,
-                          max_lines=15, smooth=True, baseline="open", target_date=None):
-    df = fetch_intraday_data(tickers, target_date)
-    if df.empty:
-        return None
-    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline)
 
 # ===================== ORIGINAL PLOT & RUNNER =====================
 def plot_returns_evolution(df, group_name, custom_title, period="YTD",
