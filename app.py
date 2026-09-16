@@ -505,7 +505,25 @@ elif tool == "Intradía":
     custom_title = st.text_input("Título personalizado (opcional)", "")
     max_lines = st.slider("Máx. líneas", 5, 30, 15)
     smooth = st.checkbox("Suavizar curvas", True)
-    
+
+    # === NEW: ventana horaria opcional para recortar lo que se muestra ===
+    limit_time_window = st.checkbox("Restringir horario mostrado en el gráfico", False)
+    start_time_val = None
+    end_time_val = None
+    if limit_time_window:
+        tcol1, tcol2 = st.columns(2)
+        with tcol1:
+            start_time_val = st.time_input("Desde", value=datetime.strptime("09:30", "%H:%M").time())
+        with tcol2:
+            end_time_val = st.time_input("Hasta", value=datetime.strptime("16:00", "%H:%M").time())
+
+    # === NEW: líneas verticales de referencia (sutiles, opcionales) ===
+    ref_times_str = st.text_input(
+        "Líneas de referencia (opcional, HH:MM o HH:MM|Etiqueta, separadas por coma)",
+        "",
+        help="Ej: 09:30|Apertura, 14:00|FOMC, 15:45"
+    )
+
     if st.button("Generar gráfico intradía"):
         tickers = []
         final_group_name = group_name
@@ -523,6 +541,15 @@ elif tool == "Intradía":
         
         tickers = list(dict.fromkeys(tickers))
         
+        ref_times = None
+        if ref_times_str.strip():
+            ref_times = []
+            for chunk in ref_times_str.split(","):
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                ref_times.append(chunk)  # el parseo de "HH:MM|Etiqueta" se hace en returns_evolution_plot
+
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
         else:
@@ -533,7 +560,10 @@ elif tool == "Intradía":
                 max_lines=max_lines,
                 smooth=smooth,
                 baseline="open" if baseline == "Apertura del día" else "close",
-                target_date=selected_date   # ← NEW
+                target_date=selected_date,        # ← NEW
+                start_time=start_time_val,        # ← NEW
+                end_time=end_time_val,             # ← NEW
+                ref_times=ref_times                # ← NEW
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
@@ -1216,5 +1246,3 @@ elif tool == "Ratio entre activos":
                 st.warning("No se pudo generar el gráfico de ratio (datos insuficientes).")
             else:
                 st.plotly_chart(fig, use_container_width=True)
-
-
