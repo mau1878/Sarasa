@@ -22,6 +22,7 @@ from inflation_adjusted_plot import (
     generate_matplotlib_plots,
 )
 from ratio_plot import run_ratio
+from ratio_backtest import render_ratio_simulator
 from distribution_plot import (
     run_histogram, run_period_ranking, run_streaks,
     run_average_changes, run_yearly_ranking, run_descriptive_stats, run_period_line,
@@ -228,7 +229,9 @@ def fetch_data_yf_ratio(ticker, start_date, end_date):
     return data[[col]].rename(columns={col: "Adj Close"})
 
 
-def build_ratio_figure(main_ticker, compare_ticker, source="yfinance", start_year=None):
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_ratio_prices(main_ticker, compare_ticker, start_year=None):
+    """Descarga (con caché) los precios de ambos tickers alineados por fecha. Devuelve (serie_main, serie_comp) o None."""
     end_date = datetime.now()
     if start_year:
         start_date = datetime.strptime(f"{start_year}-01-01", "%Y-%m-%d")
@@ -246,8 +249,19 @@ def build_ratio_figure(main_ticker, compare_ticker, source="yfinance", start_yea
     if len(common_index) < 50:
         return None
 
-    main_series = df_main.loc[common_index, "Adj Close"]
-    comp_series = df_comp.loc[common_index, "Adj Close"]
+    main_series = df_main.loc[common_index, "Adj Close"].dropna()
+    comp_series = df_comp.loc[common_index, "Adj Close"].dropna()
+    common_index = main_series.index.intersection(comp_series.index)
+    if len(common_index) < 50:
+        return None
+    return main_series.loc[common_index], comp_series.loc[common_index]
+
+
+def build_ratio_figure(main_ticker, compare_ticker, source="yfinance", start_year=None):
+    prices = get_ratio_prices(main_ticker, compare_ticker, start_year)
+    if prices is None:
+        return None
+    main_series, comp_series = prices
 
     ratio = main_series / comp_series
 
@@ -1248,13 +1262,26 @@ elif tool == "Ratio entre activos":
         if not main or not compare:
             st.warning("Elegí un par predefinido o ingresá ambos tickers manualmente.")
         else:
-            fig = build_ratio_figure(
-                main,
-                compare,
-                source=source,
-                start_year=int(start_year) if start_year else None,
-            )
-            if fig is None:
-                st.warning("No se pudo generar el gráfico de ratio (datos insuficientes).")
-            else:
-                st.plotly_chart(fig, use_container_width=True)
+            # Se guarda el par activo para que el simulador siga visible al tocar sus controles
+            st.session_state["ratio_active"] = {
+                "main": main,
+                "compare": compare,
+                "source": source,
+                "start_year": int(start_year) if start_year else None,
+            }
+
+    active = st.session_state.get("ratio_active")
+    if active:
+        fig = build_ratio_figure(
+            active["main"],
+            active["compare"],
+            source=active["source"],
+            start_year=active["start_year"],
+        )
+        if fig is None:
+            st.warning("No se pudo generar el gráfico de ratio (datos insuficientes).")
+        else:
+            st.plotly_chart(fig, use_container_width=True)
+            prices = get_ratio_prices(active["main"], active["compare"], active["start_year"])
+            if prices is not None:
+                render_ratio_simulator(prices[0], prices[1], active["main"], active["compare"])
