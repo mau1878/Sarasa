@@ -106,7 +106,7 @@ def _short_fmt(v):
 def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
     """
     cluster:    reordenar por similitud (default: True si hay >12 tickers)
-    mask_upper: mostrar solo el triángulo inferior (default: True si hay >25 tickers)
+    mask_upper: mostrar solo el triángulo inferior (default: False, matriz cuadrada completa)
     El tamaño de la figura y de las fuentes escala con la cantidad de tickers.
     """
     n = len(corr_matrix)
@@ -116,7 +116,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
     if cluster:
         corr_matrix = _order_by_clustering(corr_matrix)
     if mask_upper is None:
-        mask_upper = n > 25
+        mask_upper = False  # matriz cuadrada completa por defecto
 
     # ---------- Tamaños adaptativos ----------
     fig_w = max(13, 0.42 * n + 3)
@@ -153,7 +153,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
         cbar_kws={
             'label': 'Pearson Correlation',
             'shrink': 0.7,
-            'pad': 0.03,
+            'pad': 0.07,  # espacio extra para las etiquetas del costado derecho
             'fraction': 0.046,
         },
         square=True,
@@ -174,12 +174,27 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
         fontsize=min(19 * scale, 30), color=TEXT_COLOR, weight='bold', pad=25
     )
 
-    ax.tick_params(axis='both', colors=TEXT_COLOR, labelsize=tick_size)
-    if n > 25:
-        plt.setp(ax.get_xticklabels(), rotation=90, ha='center')
-    else:
-        plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
-    plt.setp(ax.get_yticklabels(), rotation=0)
+    # Tickers en los cuatro costados (abajo, arriba, izquierda, derecha)
+    ax.tick_params(
+        axis='both', colors=TEXT_COLOR, labelsize=tick_size,
+        top=True, bottom=True, left=True, right=True,
+        labeltop=True, labelbottom=True, labelleft=True, labelright=True,
+    )
+    for tick in ax.xaxis.get_major_ticks():
+        if n > 25:
+            for lbl in (tick.label1, tick.label2):
+                lbl.set_rotation(90)
+                lbl.set_ha('center')
+        else:
+            tick.label1.set_rotation(45)
+            tick.label1.set_ha('right')
+            tick.label1.set_rotation_mode('anchor')
+            tick.label2.set_rotation(45)
+            tick.label2.set_ha('left')
+            tick.label2.set_rotation_mode('anchor')
+    for tick in ax.yaxis.get_major_ticks():
+        tick.label1.set_rotation(0)
+        tick.label2.set_rotation(0)
 
     ax.set_xlabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
     ax.set_ylabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
