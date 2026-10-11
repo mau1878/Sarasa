@@ -35,6 +35,8 @@ ANNOT_MAX_TICKERS = 30
 # Líneas que separan los bloques (clusters)
 BLOCK_LINE_COLOR = (224/255, 224/255, 255/255, 0.9)
 BLOCK_LINE_WIDTH = 2.2
+# Colores de las etiquetas de ticker, alternados entre bloques consecutivos
+BLOCK_LABEL_COLORS = (TEXT_COLOR, '#ffaa60')
 
 
 def get_data_and_corr(tickers, start_year=None):
@@ -150,7 +152,9 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     scale = fig_w / 13
     cell_pt = fig_h * 0.78 * 72 / n                      # lado aprox. de una celda en puntos
     annot_size = float(np.clip(cell_pt * 0.34, 6, 11))
-    tick_size = float(np.clip(cell_pt * 0.42, 7, 11))
+    # Etiquetas: hasta ~62% del lado de la celda (el texto vertical necesita entrar en una columna),
+    # con tope proporcional al tamaño de la figura para no inflarlas con pocos tickers
+    tick_size = float(np.clip(cell_pt * 0.62, 7, 11 * scale))
     dpi = 300 if n <= 25 else 200
 
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor=PAPER_COLOR)
@@ -237,6 +241,15 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         tick.label1.set_rotation(0)
         tick.label2.set_rotation(0)
 
+    # Etiquetas coloreadas por bloque (dos tonos alternados)
+    if blocks is not None:
+        seq = np.concatenate([[0], np.cumsum(blocks[1:] != blocks[:-1])])
+        for axis in (ax.xaxis, ax.yaxis):
+            for i, tick in enumerate(axis.get_major_ticks()):
+                col = BLOCK_LABEL_COLORS[int(seq[i]) % 2]
+                tick.label1.set_color(col)
+                tick.label2.set_color(col)
+
     ax.set_xlabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
     ax.set_ylabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
 
@@ -268,7 +281,8 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         if cluster:
             s = "Los tickers están ordenados por similitud"
             if blocks is not None:
-                s += " y las líneas gruesas separan grupos de ETFs que se comportan parecido entre sí"
+                s += (" y las líneas gruesas separan grupos de ETFs que se comportan parecido entre sí "
+                      "(los tickers de cada grupo comparten color; se alternan dos tonos)")
             parts.append(s + ".")
         parts.append("Correlación no implica causalidad y cambia según el período elegido.")
 
