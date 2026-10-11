@@ -30,6 +30,12 @@ DARK_DIVERGING = sns.diverging_palette(
 YEARS_BACK = 5
 OUTPUT_FILE = "correlation_temp.png"
 
+# Con más tickers que esto, los números se omiten por defecto (no se leen en un feed/celular)
+ANNOT_MAX_TICKERS = 30
+# Líneas que separan los bloques (clusters)
+BLOCK_LINE_COLOR = (224/255, 224/255, 255/255, 0.9)
+BLOCK_LINE_WIDTH = 2.2
+
 
 def get_data_and_corr(tickers, start_year=None):
     end_date = datetime.now()
@@ -74,19 +80,33 @@ def get_data_and_corr(tickers, start_year=None):
     return corr_matrix
 
 
-def _order_by_clustering(corr):
-    """Reordena tickers por clustering jerárquico: los que se parecen quedan juntos."""
+def _order_by_clustering(corr, n_blocks=None):
+    """
+    Reordena tickers por clustering jerárquico: los que se parecen quedan juntos.
+    Devuelve (matriz_reordenada, ids_de_bloque) donde ids_de_bloque es un array con el
+    bloque de cada ticker en el nuevo orden (o None si no se pidieron bloques / no hay scipy).
+    n_blocks: cantidad de bloques (None = automático ~n/7, entre 3 y 10; 0 = sin bloques).
+    """
     try:
-        from scipy.cluster.hierarchy import linkage, leaves_list
+        from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
         from scipy.spatial.distance import squareform
     except ImportError:
-        return corr
+        return corr, None
+    n = len(corr)
     c = corr.fillna(0).values
     dist = np.sqrt(np.clip(0.5 * (1 - c), 0, None))
     np.fill_diagonal(dist, 0)
     dist = (dist + dist.T) / 2
-    order = leaves_list(linkage(squareform(dist, checks=False), method='average'))
-    return corr.iloc[order, order]
+    Z = linkage(squareform(dist, checks=False), method='average')
+    order = leaves_list(Z)
+    ordered = corr.iloc[order, order]
+
+    if n_blocks is None:
+        n_blocks = int(np.clip(round(n / 7), 3, 10))
+    if n_blocks and n_blocks > 1 and n > n_blocks:
+        labels = fcluster(Z, t=n_blocks, criterion='maxclust')[order]
+        return ordered, labels
+    return ordered, None
 
 
 def _short_fmt(v):
@@ -103,8 +123,12 @@ def _short_fmt(v):
     return s
 
 
-def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
+def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
+                     annotate=None, n_blocks=None):
     """
+    annotate:   mostrar los números en cada celda (default: True si hay <=30 tickers)
+    n_blocks:   bloques a marcar con líneas gruesas al reordenar por similitud
+                (default: automático, 0 = sin líneas)
     cluster:    reordenar por similitud (default: True si hay >12 tickers)
     mask_upper: mostrar solo el triángulo inferior (default: False, matriz cuadrada completa)
     El tamaño de la figura y de las fuentes escala con la cantidad de tickers.
@@ -113,8 +137,9 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
 
     if cluster is None:
         cluster = n > 12
+    blocks = None
     if cluster:
-        corr_matrix = _order_by_clustering(corr_matrix)
+        corr_matrix, blocks = _order_by_clustering(corr_matrix, n_blocks)
     if mask_upper is None:
         mask_upper = False  # matriz cuadrada completa por defecto
 
@@ -130,8 +155,13 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
     fig = plt.figure(figsize=(fig_w, fig_h), facecolor=PAPER_COLOR)
     ax = fig.add_subplot(111, facecolor=BG_COLOR)
 
-    # Anotaciones: con muchos tickers, formato corto sin cero inicial
-    if n > 20:
+    # Anotaciones: con muchos tickers se omiten; con 21-30, formato corto sin cero inicial
+    if annotate is None:
+        annotate = n <= ANNOT_MAX_TICKERS
+    if not annotate:
+        annot = False
+        fmt = ''
+    elif n > 20:
         annot = corr_matrix.apply(lambda col: col.map(_short_fmt)).values
         fmt = ''
     else:
@@ -163,6 +193,16 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None):
         yticklabels=True,
         ax=ax
     )
+
+    # Líneas gruesas entre bloques (clusters)
+    if blocks is not None:
+        for b in [i for i in range(1, n) if blocks[i] != blocks[i - 1]]:
+            if mask_upper:
+                ax.hlines(b, 0, b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
+                ax.vlines(b, b, n, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
+            else:
+                ax.axhline(b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
+                ax.axvline(b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
 
     cbar = heatmap.collections[0].colorbar
     cbar.ax.yaxis.set_tick_params(color=TEXT_COLOR)
