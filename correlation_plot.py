@@ -39,7 +39,9 @@ BLOCK_LINE_WIDTH = 2.2
 SUB_LINE_COLOR = (224/255, 224/255, 255/255, 0.55)
 SUB_LINE_WIDTH = 1.2
 # Colores de las etiquetas de ticker, alternados entre bloques consecutivos
-BLOCK_LABEL_COLORS = (TEXT_COLOR, '#ffaa60')
+# Cada bloque usa un par (tono pleno, tono apagado): el pleno y el apagado se alternan entre
+# los subbloques de ese bloque; el par cambia entre bloques consecutivos
+BLOCK_LABEL_COLORS = ((TEXT_COLOR, '#8f96d8'), ('#ffaa60', '#c97b3c'))
 
 
 def get_data_and_corr(tickers, start_year=None):
@@ -269,14 +271,22 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         tick.label1.set_rotation(0)
         tick.label2.set_rotation(0)
 
-    # Etiquetas coloreadas por bloque (dos tonos alternados)
+    # Etiquetas coloreadas por bloque (dos colores alternados) y, dentro de cada bloque,
+    # por subbloque (variación leve de tono entre subbloques consecutivos)
     if blocks is not None:
-        seq = np.concatenate([[0], np.cumsum(blocks[1:] != blocks[:-1])])
+        label_cols = []
+        blk_idx, sub_idx = 0, 0
+        for i in range(n):
+            if i > 0 and blocks[i] != blocks[i - 1]:
+                blk_idx += 1
+                sub_idx = 0
+            elif i > 0 and sub is not None and sub[i] != sub[i - 1]:
+                sub_idx += 1
+            label_cols.append(BLOCK_LABEL_COLORS[blk_idx % 2][sub_idx % 2])
         for axis in (ax.xaxis, ax.yaxis):
             for i, tick in enumerate(axis.get_major_ticks()):
-                col = BLOCK_LABEL_COLORS[int(seq[i]) % 2]
-                tick.label1.set_color(col)
-                tick.label2.set_color(col)
+                tick.label1.set_color(label_cols[i])
+                tick.label2.set_color(label_cols[i])
 
     ax.set_xlabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
     ax.set_ylabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
@@ -303,7 +313,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         import textwrap
         parts = [
             "Cómo leerlo: cada celda es la correlación (Pearson) entre los retornos diarios "
-            "de dos ETFs. Verde (hacia +1): tienden a moverse juntos. Rojo (hacia -1): tienden "
+            "de dos ETFs. Verde (hacia +1): tienden a moverse juntos. Rojo (hacia −1): tienden "
             "a moverse en sentido contrario. Oscuro (cerca de 0): sin relación clara."
         ]
         if cluster:
@@ -315,7 +325,8 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
                 )
             if sub is not None:
                 parts.append(
-                    f"Las líneas finas marcan subgrupos más afines (corte en ~{rho_sub:.2f})."
+                    f"Las líneas finas separan subgrupos con una correlación promedio de ~{rho_sub:.2f} "
+                    "o menos entre sí (dentro de cada grupo, el tono del color varía levemente entre subgrupos)."
                 )
         parts.append("Correlación no implica causalidad y cambia según el período elegido.")
 
