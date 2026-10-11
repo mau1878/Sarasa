@@ -674,6 +674,11 @@ elif tool == "Correlación":
     selected_group = st.selectbox("Grupo predefinido (correlationgroups.json)", group_titles)
     tickers_str = st.text_input("Tickers manuales (coma)", "")
     custom_title = st.text_input("Título (opcional)", "")
+    corr_blocks = st.slider(
+        "Bloques marcados con líneas gruesas (0 = automático)",
+        min_value=0, max_value=20, value=0,
+        help="Más bloques = grupos más chicos. Solo aplica con más de 12 tickers (cuando se ordenan por similitud).",
+    )
 
     if st.button("Generar matriz"):
         tickers = []
@@ -693,7 +698,7 @@ elif tool == "Correlación":
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
         else:
-            path = run_correlation(tickers, title=title)
+            path = run_correlation(tickers, title=title, n_blocks=corr_blocks)
             if path:
                 st.image(path, width="stretch")
             else:
