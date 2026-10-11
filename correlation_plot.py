@@ -124,8 +124,9 @@ def _short_fmt(v):
 
 
 def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
-                     annotate=None, n_blocks=None):
+                     annotate=None, n_blocks=None, footnote=True):
     """
+    footnote:   texto explicativo al pie sobre cómo leer el gráfico (default: True)
     annotate:   mostrar los números en cada celda (default: True si hay <=30 tickers)
     n_blocks:   bloques a marcar con líneas gruesas al reordenar por similitud
                 (default: automático, 0 = sin líneas)
@@ -256,7 +257,31 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         fontsize=9 * min(scale, 1.6), color='gray', alpha=0.65
     )
 
-    plt.tight_layout(pad=1.8)
+    # Texto explicativo al pie
+    if footnote:
+        import textwrap
+        parts = [
+            "Cómo leerlo: cada celda es la correlación (Pearson) entre los retornos diarios "
+            "de dos ETFs. Verde (hacia +1): tienden a moverse juntos. Rojo (hacia -1): tienden "
+            "a moverse en sentido contrario. Oscuro (cerca de 0): sin relación clara."
+        ]
+        if cluster:
+            s = "Los tickers están ordenados por similitud"
+            if blocks is not None:
+                s += " y las líneas gruesas separan grupos de ETFs que se comportan parecido entre sí"
+            parts.append(s + ".")
+        parts.append("Correlación no implica causalidad y cambia según el período elegido.")
+
+        fs = float(np.clip(11 * scale, 10, 18))
+        chars = int(fig_w * 72 * 0.78 / (0.55 * fs))
+        text = textwrap.fill(" ".join(parts), width=chars)
+        n_lines = text.count("\n") + 1
+        bottom_in = n_lines * fs * 1.45 / 72 + 0.3   # pulgadas reservadas al pie
+        fig.text(0.03, 0.12 / fig_h, text, ha='left', va='bottom', fontsize=fs,
+                 color=TEXT_COLOR, alpha=0.8, linespacing=1.4)
+        plt.tight_layout(pad=1.8, rect=(0, bottom_in / fig_h, 1, 1))
+    else:
+        plt.tight_layout(pad=1.8)
 
     abs_path = os.path.abspath(OUTPUT_FILE)
     plt.savefig(abs_path, dpi=dpi, bbox_inches='tight', facecolor=PAPER_COLOR)
@@ -270,6 +295,7 @@ def main():
     parser.add_argument('--tickers', nargs='+', required=True, help='List of tickers (space separated)')
     parser.add_argument('--title', type=str, default="Acciones", help='Título del gráfico')
     parser.add_argument('--start_year', type=int, default=None, help='Año de inicio (opcional)')
+    parser.add_argument('--n_blocks', type=int, default=None, help='Cantidad de bloques (0 = sin líneas, omitir = automático)')
     args = parser.parse_args()
 
     try:
@@ -278,19 +304,20 @@ def main():
         if corr_matrix is None or corr_matrix.empty:
             sys.exit(1)
 
-        path = plot_correlation(corr_matrix, args.title)
+        path = plot_correlation(corr_matrix, args.title, n_blocks=args.n_blocks)
         print(f"|{path}|")
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
 
-def run_correlation(tickers, title="Acciones", start_year=None):
-    """Wrapper for Streamlit: builds correlation heatmap."""
+def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None):
+    """Wrapper for Streamlit: builds correlation heatmap.
+    n_blocks: None/0 = automático; N = cantidad de bloques marcados con líneas gruesas."""
     unique_tickers = list(dict.fromkeys([t.upper() for t in tickers]))
     corr_matrix = get_data_and_corr(unique_tickers, start_year)
     if corr_matrix is None or corr_matrix.empty:
         return None
-    path = plot_correlation(corr_matrix, title)
+    path = plot_correlation(corr_matrix, title, n_blocks=(n_blocks or None))
     return path
 
 if __name__ == "__main__":
