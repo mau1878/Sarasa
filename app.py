@@ -679,6 +679,11 @@ elif tool == "Correlación":
         min_value=0, max_value=20, value=0,
         help="Más bloques = grupos más chicos. Solo aplica con más de 12 tickers (cuando se ordenan por similitud).",
     )
+    corr_subblocks = st.slider(
+        "Subbloques marcados con líneas finas (0 = sin subbloques)",
+        min_value=0, max_value=40, value=0,
+        help="Segundo nivel, más fino. Tiene que ser mayor que la cantidad de bloques; si no, se ignora.",
+    )
 
     if st.button("Generar matriz"):
         tickers = []
@@ -698,7 +703,7 @@ elif tool == "Correlación":
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
         else:
-            path = run_correlation(tickers, title=title, n_blocks=corr_blocks)
+            path = run_correlation(tickers, title=title, n_blocks=corr_blocks, n_subblocks=corr_subblocks)
             if path:
                 st.image(path, width="stretch")
             else:

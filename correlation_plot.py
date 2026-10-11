@@ -35,6 +35,9 @@ ANNOT_MAX_TICKERS = 30
 # Líneas que separan los bloques (clusters)
 BLOCK_LINE_COLOR = (224/255, 224/255, 255/255, 0.9)
 BLOCK_LINE_WIDTH = 2.2
+# Líneas finas de subbloques (segundo nivel, anidado dentro de los bloques)
+SUB_LINE_COLOR = (224/255, 224/255, 255/255, 0.55)
+SUB_LINE_WIDTH = 1.2
 # Colores de las etiquetas de ticker, alternados entre bloques consecutivos
 BLOCK_LABEL_COLORS = (TEXT_COLOR, '#ffaa60')
 
@@ -82,33 +85,56 @@ def get_data_and_corr(tickers, start_year=None):
     return corr_matrix
 
 
-def _order_by_clustering(corr, n_blocks=None):
+def _order_by_clustering(corr, n_blocks=None, n_sub=None):
     """
-    Reordena tickers por clustering jerárquico: los que se parecen quedan juntos.
-    Devuelve (matriz_reordenada, ids_de_bloque) donde ids_de_bloque es un array con el
-    bloque de cada ticker en el nuevo orden (o None si no se pidieron bloques / no hay scipy).
-    n_blocks: cantidad de bloques (None = automático ~n/7, entre 3 y 10; 0 = sin bloques).
+    Reordena tickers por clustering jerárquico (los que se parecen quedan juntos) y define
+    dos niveles de agrupación anidados: bloques (corte alto del árbol) y subbloques (corte más bajo).
+    Devuelve un dict con:
+      corr:       matriz reordenada
+      blocks/sub: ids de grupo por ticker en el nuevo orden (None si ese nivel no se pidió)
+      rho_blocks/rho_sub: correlación promedio aproximada a la que se hizo cada corte
+    n_blocks: None = automático (~n/7, entre 3 y 10); 0 = sin bloques.
+    n_sub:    None/0 = sin subbloques; N = cantidad de subbloques (debe ser mayor que los bloques).
     """
+    out = {'corr': corr, 'blocks': None, 'sub': None, 'rho_blocks': None, 'rho_sub': None}
     try:
         from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
         from scipy.spatial.distance import squareform
     except ImportError:
-        return corr, None
+        return out
     n = len(corr)
     c = corr.fillna(0).values
-    dist = np.sqrt(np.clip(0.5 * (1 - c), 0, None))
+    dist = np.sqrt(np.clip(0.5 * (1 - c), 0, None))   # corr 1 -> 0, corr -1 -> 1
     np.fill_diagonal(dist, 0)
     dist = (dist + dist.T) / 2
     Z = linkage(squareform(dist, checks=False), method='average')
     order = leaves_list(Z)
-    ordered = corr.iloc[order, order]
+    out['corr'] = corr.iloc[order, order]
+
+    def cut(k):
+        labels = fcluster(Z, t=k, criterion='maxclust')[order]
+        # altura del corte: entre la última fusión hecha y la primera deshecha
+        h = 0.5 * (Z[n - 1 - k, 2] + Z[n - k, 2])
+        return labels, round(float(1 - 2 * h * h), 2)   # distancia -> correlación equivalente
 
     if n_blocks is None:
         n_blocks = int(np.clip(round(n / 7), 3, 10))
-    if n_blocks and n_blocks > 1 and n > n_blocks:
-        labels = fcluster(Z, t=n_blocks, criterion='maxclust')[order]
-        return ordered, labels
-    return ordered, None
+    if n_blocks and 1 < n_blocks < n:
+        out['blocks'], out['rho_blocks'] = cut(n_blocks)
+        if n_sub and n_blocks < n_sub < n:
+            out['sub'], out['rho_sub'] = cut(n_sub)
+    return out
+
+
+def _draw_boundaries(ax, bounds, n, upper_masked, **kw):
+    """Dibuja líneas horizontales y verticales en las posiciones dadas (respeta el triángulo)."""
+    for b in bounds:
+        if upper_masked:
+            ax.hlines(b, 0, b, **kw)
+            ax.vlines(b, b, n, **kw)
+        else:
+            ax.axhline(b, **kw)
+            ax.axvline(b, **kw)
 
 
 def _short_fmt(v):
@@ -126,12 +152,14 @@ def _short_fmt(v):
 
 
 def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
-                     annotate=None, n_blocks=None, footnote=True):
+                     annotate=None, n_blocks=None, footnote=True, n_subblocks=None):
     """
     footnote:   texto explicativo al pie sobre cómo leer el gráfico (default: True)
     annotate:   mostrar los números en cada celda (default: True si hay <=30 tickers)
     n_blocks:   bloques a marcar con líneas gruesas al reordenar por similitud
                 (default: automático, 0 = sin líneas)
+    n_subblocks: segundo nivel, más fino, marcado con líneas finas (default: None = sin subbloques;
+                debe ser mayor que la cantidad de bloques)
     cluster:    reordenar por similitud (default: True si hay >12 tickers)
     mask_upper: mostrar solo el triángulo inferior (default: False, matriz cuadrada completa)
     El tamaño de la figura y de las fuentes escala con la cantidad de tickers.
@@ -140,9 +168,11 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
 
     if cluster is None:
         cluster = n > 12
-    blocks = None
+    blocks = sub = rho_blocks = rho_sub = None
     if cluster:
-        corr_matrix, blocks = _order_by_clustering(corr_matrix, n_blocks)
+        res = _order_by_clustering(corr_matrix, n_blocks, n_subblocks)
+        corr_matrix, blocks, sub = res['corr'], res['blocks'], res['sub']
+        rho_blocks, rho_sub = res['rho_blocks'], res['rho_sub']
     if mask_upper is None:
         mask_upper = False  # matriz cuadrada completa por defecto
 
@@ -199,15 +229,13 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         ax=ax
     )
 
-    # Líneas gruesas entre bloques (clusters)
+    # Líneas finas entre subbloques (debajo) y gruesas entre bloques (encima)
+    if sub is not None:
+        sub_b = [i for i in range(1, n) if sub[i] != sub[i - 1]]
+        _draw_boundaries(ax, sub_b, n, mask_upper, color=SUB_LINE_COLOR, lw=SUB_LINE_WIDTH)
     if blocks is not None:
-        for b in [i for i in range(1, n) if blocks[i] != blocks[i - 1]]:
-            if mask_upper:
-                ax.hlines(b, 0, b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
-                ax.vlines(b, b, n, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
-            else:
-                ax.axhline(b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
-                ax.axvline(b, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
+        blk_b = [i for i in range(1, n) if blocks[i] != blocks[i - 1]]
+        _draw_boundaries(ax, blk_b, n, mask_upper, color=BLOCK_LINE_COLOR, lw=BLOCK_LINE_WIDTH)
 
     cbar = heatmap.collections[0].colorbar
     cbar.ax.yaxis.set_tick_params(color=TEXT_COLOR)
@@ -279,11 +307,16 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
             "a moverse en sentido contrario. Oscuro (cerca de 0): sin relación clara."
         ]
         if cluster:
-            s = "Los tickers están ordenados por similitud"
+            parts.append("Los tickers están ordenados por similitud.")
             if blocks is not None:
-                s += (" y las líneas gruesas separan grupos de ETFs que se comportan parecido entre sí "
-                      "(los tickers de cada grupo comparten color; se alternan dos tonos)")
-            parts.append(s + ".")
+                parts.append(
+                    "Las líneas gruesas separan grupos de ETFs con una correlación promedio de "
+                    f"~{rho_blocks:.2f} o menos entre sí (cada grupo comparte color; se alternan dos tonos)."
+                )
+            if sub is not None:
+                parts.append(
+                    f"Las líneas finas marcan subgrupos más afines (corte en ~{rho_sub:.2f})."
+                )
         parts.append("Correlación no implica causalidad y cambia según el período elegido.")
 
         fs = float(np.clip(11 * scale, 10, 18))
@@ -310,6 +343,7 @@ def main():
     parser.add_argument('--title', type=str, default="Acciones", help='Título del gráfico')
     parser.add_argument('--start_year', type=int, default=None, help='Año de inicio (opcional)')
     parser.add_argument('--n_blocks', type=int, default=None, help='Cantidad de bloques (0 = sin líneas, omitir = automático)')
+    parser.add_argument('--n_subblocks', type=int, default=None, help='Cantidad de subbloques (líneas finas); omitir = sin subbloques')
     args = parser.parse_args()
 
     try:
@@ -318,20 +352,23 @@ def main():
         if corr_matrix is None or corr_matrix.empty:
             sys.exit(1)
 
-        path = plot_correlation(corr_matrix, args.title, n_blocks=args.n_blocks)
+        path = plot_correlation(corr_matrix, args.title, n_blocks=args.n_blocks,
+                                n_subblocks=args.n_subblocks)
         print(f"|{path}|")
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
 
-def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None):
+def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None, n_subblocks=None):
     """Wrapper for Streamlit: builds correlation heatmap.
-    n_blocks: None/0 = automático; N = cantidad de bloques marcados con líneas gruesas."""
+    n_blocks:    None/0 = automático; N = cantidad de bloques marcados con líneas gruesas.
+    n_subblocks: None/0 = sin subbloques; N = cantidad de subbloques (líneas finas), mayor que los bloques."""
     unique_tickers = list(dict.fromkeys([t.upper() for t in tickers]))
     corr_matrix = get_data_and_corr(unique_tickers, start_year)
     if corr_matrix is None or corr_matrix.empty:
         return None
-    path = plot_correlation(corr_matrix, title, n_blocks=(n_blocks or None))
+    path = plot_correlation(corr_matrix, title, n_blocks=(n_blocks or None),
+                            n_subblocks=(n_subblocks or None))
     return path
 
 if __name__ == "__main__":
