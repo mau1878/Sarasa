@@ -292,6 +292,19 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     ax.set_xlabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
     ax.set_ylabel("Tickers", fontsize=12 * min(scale, 1.6), color=TEXT_COLOR, labelpad=12)
 
+    # Ancho ajustado al contenido real: con pocos tickers la matriz (cuadrada, limitada por el alto)
+    # no llena la figura y quedaba aire a los costados. Se mide lo que ocupa todo (matriz, etiquetas,
+    # título y barra de color) y se achica el ancho; el alto y el tamaño de las fuentes no cambian.
+    from matplotlib.transforms import Bbox
+    plt.tight_layout(pad=1.8)
+    fig.canvas.draw()
+    _r = fig.canvas.get_renderer()
+    _content = Bbox.union([ax.get_tightbbox(_r), cbar.ax.get_tightbbox(_r)])
+    _new_w = float(np.clip(_content.width / fig.dpi + 0.8, 9.5, fig_w))
+    if _new_w < fig_w - 0.2:
+        fig.set_size_inches(_new_w, fig_h)
+        fig_w = _new_w
+
     fig.text(
         0.5, 0.5,
         "MTaurus - X: @MTaurus_ok",
@@ -334,7 +347,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         from matplotlib.font_manager import FontProperties
         fs = float(np.clip(11 * scale, 10, 18))
         joined = " ".join(parts)
-        max_px = fig_w * 0.78 * fig.dpi
+        max_px = fig_w * 0.94 * fig.dpi
         # Se mide con la fuente real (cada tipografía tiene otro ancho y otra altura de línea)
         try:
             renderer = fig.canvas.get_renderer()
@@ -351,7 +364,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
             text = "\n".join(lines)
         except Exception:
             renderer = None
-            text = textwrap.fill(joined, width=int(fig_w * 72 * 0.78 / (0.55 * fs)))
+            text = textwrap.fill(joined, width=int(fig_w * 72 * 0.94 / (0.55 * fs)))
         foot = fig.text(0.03, 0.12 / fig_h, text, ha='left', va='bottom', fontsize=fs,
                         color=TEXT_COLOR, alpha=0.8, linespacing=1.4)
         if renderer is not None:
