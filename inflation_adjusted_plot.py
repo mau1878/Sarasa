@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
@@ -21,7 +22,7 @@ PRIMARY_COLOR = '#40c0ff'
 plot_style = {
     'plot_bgcolor': '#0a0a12',
     'paper_bgcolor': '#05050a',
-    'font': dict(color='#e0e0ff', family='Arial', size=15),
+    'font': dict(color='#e0e0ff', family=mtaurus_style.PLOTLY_FONT_FAMILY, size=15),
     'template': 'plotly_dark',
 }
 

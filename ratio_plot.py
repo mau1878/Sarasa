@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 import plotly.graph_objects as go
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import yfinance as yf
 import os
 import requests

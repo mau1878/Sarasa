@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 from datetime import datetime, timedelta, time as dtime
 from scipy.interpolate import make_interp_spline
 from adjustText import adjust_text

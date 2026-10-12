@@ -2,6 +2,7 @@ import argparse
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import matplotlib.colors as mcolors
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 import sys

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import plotly.graph_objs as go
@@ -26,7 +27,7 @@ import data_sources
 PLOT_STYLE = {
     'plot_bgcolor': 'rgb(30, 30, 30)',
     'paper_bgcolor': 'rgb(30, 30, 30)',
-    'font': dict(color='white', family='Arial', size=14),
+    'font': dict(color='white', family=mtaurus_style.PLOTLY_FONT_FAMILY, size=14),
     'xaxis': dict(gridcolor='rgba(255,255,255,0.2)', zerolinecolor='rgba(255,255,255,0.2)',
                   tickformat="%b %Y", tickangle=45, nticks=10),
     'yaxis': dict(gridcolor='rgba(255,255,255,0.2)', zerolinecolor='rgba(255,255,255,0.2)', tickformat=".2f"),

@@ -30,12 +30,14 @@ from distribution_plot import (
 import data_sources
 import stock_adjuster
 import plotly.io as pio
+import mtaurus_style
 import os
 import json
 import os
 
 
 st.set_page_config(page_title="MTaurus Charts", layout="wide")
+mtaurus_style.inject_streamlit_font(st)  # carga la tipografía en el navegador (gráficos plotly)
 
 st.title("MTaurus – Chart Lab")
 
@@ -410,7 +412,7 @@ PRIMARY_COLOR = "#40c0ff"
 plot_style = {
     "plot_bgcolor": "#0f0f1a",
     "paper_bgcolor": "#05050f",
-    "font": dict(color="#e0e0ff", family="Arial", size=16),
+    "font": dict(color="#e0e0ff", family=mtaurus_style.PLOTLY_FONT_FAMILY, size=16),
     "template": "plotly_dark",
 }
 

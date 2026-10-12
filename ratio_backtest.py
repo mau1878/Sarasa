@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import streamlit as st
 
 TRADING_DAYS = 252

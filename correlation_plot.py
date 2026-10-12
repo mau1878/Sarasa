@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import os
 import sys
 from datetime import datetime, timedelta
@@ -330,13 +331,34 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
                 )
         parts.append("Correlación no implica causalidad y cambia según el período elegido.")
 
+        from matplotlib.font_manager import FontProperties
         fs = float(np.clip(11 * scale, 10, 18))
-        chars = int(fig_w * 72 * 0.78 / (0.55 * fs))
-        text = textwrap.fill(" ".join(parts), width=chars)
-        n_lines = text.count("\n") + 1
-        bottom_in = n_lines * fs * 1.45 / 72 + 0.3   # pulgadas reservadas al pie
-        fig.text(0.03, 0.12 / fig_h, text, ha='left', va='bottom', fontsize=fs,
-                 color=TEXT_COLOR, alpha=0.8, linespacing=1.4)
+        joined = " ".join(parts)
+        max_px = fig_w * 0.78 * fig.dpi
+        # Se mide con la fuente real (cada tipografía tiene otro ancho y otra altura de línea)
+        try:
+            renderer = fig.canvas.get_renderer()
+            prop = FontProperties(size=fs)
+            lines, cur = [], ""
+            for word in joined.split(" "):
+                trial = f"{cur} {word}" if cur else word
+                if cur and renderer.get_text_width_height_descent(trial, prop, False)[0] > max_px:
+                    lines.append(cur)
+                    cur = word
+                else:
+                    cur = trial
+            lines.append(cur)
+            text = "\n".join(lines)
+        except Exception:
+            renderer = None
+            text = textwrap.fill(joined, width=int(fig_w * 72 * 0.78 / (0.55 * fs)))
+        foot = fig.text(0.03, 0.12 / fig_h, text, ha='left', va='bottom', fontsize=fs,
+                        color=TEXT_COLOR, alpha=0.8, linespacing=1.4)
+        if renderer is not None:
+            text_h_in = foot.get_window_extent(renderer).height / fig.dpi
+        else:
+            text_h_in = (text.count("\n") + 1) * fs * 1.45 / 72
+        bottom_in = 0.12 + text_h_in + 0.3   # pulgadas reservadas al pie
         plt.tight_layout(pad=1.8, rect=(0, bottom_in / fig_h, 1, 1))
     else:
         plt.tight_layout(pad=1.8)

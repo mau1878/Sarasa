@@ -19,6 +19,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 from scipy.stats import norm
 from datetime import datetime, timedelta
 import warnings

@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import mtaurus_style  # noqa: F401  (tipografía compartida)
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from datetime import datetime, timedelta
