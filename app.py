@@ -14,6 +14,7 @@ from returns_evolution_plot import run_returns_evolution
 from performance_plot import run_performance
 from drawdown_plot import run_drawdown
 from correlation_plot import run_correlation, DENDROGRAM_FILE
+from portfolio_builder import render_portfolio_ui
 from heatmap_script import run_heatmap
 from inflation_adjusted_plot import (
     run_inflation_adjusted,
@@ -49,6 +50,7 @@ tool = st.sidebar.selectbox(
         "Drawdown",
         "Intradía",
         "Correlación",
+        "Formación de cartera",
         "Heatmap histórico",
         "Distribución (Histograma / Ranking / Rachas)",
         "Precio ajustado por inflación",
@@ -725,6 +727,11 @@ elif tool == "Correlación":
                     st.image(os.path.abspath(DENDROGRAM_FILE), width="stretch")
             else:
                 st.warning("No se pudo generar la matriz.")
+
+
+# ---- Formación de cartera ----
+elif tool == "Formación de cartera":
+    render_portfolio_ui(load_correlation_groups())
 
 
 # ---- Heatmap histórico ----
