@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from returns_evolution_plot import run_returns_evolution
 from performance_plot import run_performance
 from drawdown_plot import run_drawdown
-from correlation_plot import run_correlation
+from correlation_plot import run_correlation, DENDROGRAM_FILE
 from heatmap_script import run_heatmap
 from inflation_adjusted_plot import (
     run_inflation_adjusted,
@@ -686,6 +686,14 @@ elif tool == "Correlación":
         min_value=0, max_value=40, value=0,
         help="Segundo nivel, más fino. Tiene que ser mayor que la cantidad de bloques; si no, se ignora.",
     )
+    corr_residual = st.checkbox(
+        "Agrupar sin el factor de mercado (residual)", value=False,
+        help="Los grupos se calculan quitando el componente común a casi todos los activos, para que se vea la estructura interna. La matriz sigue mostrando la correlación original.",
+    )
+    corr_dendro = st.checkbox(
+        "Generar también el dendrograma", value=False,
+        help="Imagen aparte con el árbol del agrupamiento jerárquico.",
+    )
 
     if st.button("Generar matriz"):
         tickers = []
@@ -705,9 +713,16 @@ elif tool == "Correlación":
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
         else:
-            path = run_correlation(tickers, title=title, n_blocks=corr_blocks, n_subblocks=corr_subblocks)
+            if os.path.exists(DENDROGRAM_FILE):
+                os.remove(DENDROGRAM_FILE)  # evita mostrar un dendrograma viejo si esta corrida falla
+            path = run_correlation(
+                tickers, title=title, n_blocks=corr_blocks, n_subblocks=corr_subblocks,
+                residual=corr_residual, dendrogram=corr_dendro,
+            )
             if path:
                 st.image(path, width="stretch")
+                if corr_dendro and os.path.exists(DENDROGRAM_FILE):
+                    st.image(os.path.abspath(DENDROGRAM_FILE), width="stretch")
             else:
                 st.warning("No se pudo generar la matriz.")
 
