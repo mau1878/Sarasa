@@ -49,6 +49,10 @@ SUB_LINE_WIDTH = 1.2
 BLOCK_LABEL_COLORS = ((TEXT_COLOR, '#8f96d8'), ('#ffaa60', '#c97b3c'))
 # Ramas del dendrograma por encima del corte de bloques
 DENDRO_ABOVE_COLOR = '#6a6a8a'
+# Inversos / volatilidad: con residual se agrupan aparte (el factor de mercado los distorsiona)
+INVERSE_TICKERS = ('VXX', 'SH', 'PSQ')
+# Bloques con menos tickers que esto se fusionan con el bloque vecino más cercano (1 = no fusionar)
+MIN_BLOCK_SIZE = 2
 
 
 def get_data_and_corr(tickers, start_year=None):
@@ -124,7 +128,48 @@ def _inter_rho(corr, labels):
     return round(best, 2)
 
 
-def _order_by_clustering(corr, n_blocks=None, n_sub=None, residual=False):
+def _to_dist(c):
+    """Correlación -> distancia sqrt(½(1−ρ)): corr 1 -> 0, corr −1 -> 1."""
+    d = np.sqrt(np.clip(0.5 * (1 - c), 0, None))
+    np.fill_diagonal(d, 0)
+    return (d + d.T) / 2
+
+
+def _merge_small_blocks(labels, dist_ord, protected, min_size):
+    """
+    Fusiona los bloques de menos de `min_size` tickers con el bloque vecino (anterior o siguiente
+    en el orden) más cercano. `protected` marca los tickers cuyo bloque no se toca (inversos aparte).
+    """
+    labels = np.asarray(labels).copy()
+    if min_size is None or min_size <= 1:
+        return labels
+    skip = set()
+    while True:
+        starts = [0] + [i for i in range(1, len(labels)) if labels[i] != labels[i - 1]]
+        ends = starts[1:] + [len(labels)]
+        if len(starts) <= 2:
+            break
+        small = [k for k in range(len(starts))
+                 if ends[k] - starts[k] < min_size and labels[starts[k]] not in skip
+                 and not protected[starts[k]:ends[k]].all()]
+        if not small:
+            break
+        k = min(small, key=lambda j: ends[j] - starts[j])
+        s0, e0 = starts[k], ends[k]
+        cand = []
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(starts) and not protected[starts[j]:ends[j]].all():
+                cand.append((float(dist_ord[s0:e0, starts[j]:ends[j]].mean()), j))
+        if not cand:
+            skip.add(labels[s0])
+            continue
+        j = min(cand)[1]
+        labels[s0:e0] = labels[starts[j]]
+    return labels
+
+
+def _order_by_clustering(corr, n_blocks=None, n_sub=None, residual=False,
+                         inverse=None, min_block_size=None):
     """
     Reordena tickers por clustering jerárquico (los que se parecen quedan juntos) y define
     dos niveles de agrupación anidados: bloques (corte alto del árbol) y subbloques (corte más bajo).
@@ -134,26 +179,45 @@ def _order_by_clustering(corr, n_blocks=None, n_sub=None, residual=False):
       rho_blocks/rho_sub: mayor correlación promedio entre dos grupos distintos de ese nivel
       Z/order/names: linkage, orden de hojas y nombres originales (para el dendrograma)
       cut_blocks/cut_sub: altura (distancia) del corte de cada nivel
+      inverse_used: tickers inversos/volatilidad que se agruparon aparte (solo con residual)
     n_blocks: None = automático (~n/7, entre 3 y 10); 0 = sin bloques.
     n_sub:    None/0 = sin subbloques; N = cantidad de subbloques (debe ser mayor que los bloques).
     residual: True = agrupar sobre la correlación sin el factor de mercado (el primer componente),
               para que aparezca la estructura interna (sectores, países, bonos, etc.).
+    inverse:  inversos/volatilidad que, en modo residual, se excluyen del cálculo del factor de mercado
+              y forman su propio bloque (default INVERSE_TICKERS; [] = ninguno). Sin factor de mercado
+              los inversos terminan mezclados con activos "menos EEUU", lo cual es un artefacto.
+    min_block_size: los bloques con menos tickers se fusionan con el vecino más cercano
+              (default MIN_BLOCK_SIZE; 1 = no fusionar). La línea de corte del dendrograma no cambia.
     """
     out = {'corr': corr, 'blocks': None, 'sub': None, 'rho_blocks': None, 'rho_sub': None,
            'Z': None, 'order': None, 'names': list(corr.index),
-           'cut_blocks': None, 'cut_sub': None}
+           'cut_blocks': None, 'cut_sub': None, 'inverse_used': []}
     try:
         from scipy.cluster.hierarchy import linkage, leaves_list, fcluster, optimal_leaf_ordering
         from scipy.spatial.distance import squareform
     except ImportError:
         return out
     n = len(corr)
+    names = out['names']
     c = corr.fillna(0).values
-    if residual:
-        c = _remove_market_mode(c)
-    dist = np.sqrt(np.clip(0.5 * (1 - c), 0, None))   # corr 1 -> 0, corr -1 -> 1
-    np.fill_diagonal(dist, 0)
-    dist = (dist + dist.T) / 2
+    raw_dist = _to_dist(c)
+    if min_block_size is None:
+        min_block_size = MIN_BLOCK_SIZE
+    inv_set = {str(t).upper() for t in (INVERSE_TICKERS if inverse is None else inverse)}
+    inv_mask = np.array([str(t).upper() in inv_set for t in names], dtype=bool)
+    split = bool(residual) and inv_mask.sum() > 0 and (~inv_mask).sum() >= 3
+    if split:
+        rest, inv = np.where(~inv_mask)[0], np.where(inv_mask)[0]
+        dist = np.ones((n, n))                                    # inversos vs resto: distancia máxima
+        dist[np.ix_(rest, rest)] = _to_dist(_remove_market_mode(c[np.ix_(rest, rest)]))
+        dist[np.ix_(inv, inv)] = raw_dist[np.ix_(inv, inv)]       # entre sí: correlación original
+        np.fill_diagonal(dist, 0)
+        out['inverse_used'] = [names[i] for i in inv]
+    elif residual:
+        dist = _to_dist(_remove_market_mode(c))
+    else:
+        dist = raw_dist
     cond = squareform(dist, checks=False)
     Z = linkage(cond, method='average')
     try:
@@ -163,17 +227,21 @@ def _order_by_clustering(corr, n_blocks=None, n_sub=None, residual=False):
     order = leaves_list(Z)
     out['corr'] = corr.iloc[order, order]
     out['Z'], out['order'] = Z, order
+    dist_ord = dist[np.ix_(order, order)]
+    protected = inv_mask[order] if split else np.zeros(n, dtype=bool)
 
-    def cut(k):
+    def cut(k, merge=False):
         labels = fcluster(Z, t=k, criterion='maxclust')[order]
         # altura del corte: entre la última fusión hecha y la primera deshecha
         h = 0.5 * (Z[n - 1 - k, 2] + Z[n - k, 2])
+        if merge:
+            labels = _merge_small_blocks(labels, dist_ord, protected, min_block_size)
         return labels, _inter_rho(out['corr'], labels), float(h)
 
     if n_blocks is None:
         n_blocks = int(np.clip(round(n / 7), 3, 10))
     if n_blocks and 1 < n_blocks < n:
-        out['blocks'], out['rho_blocks'], out['cut_blocks'] = cut(n_blocks)
+        out['blocks'], out['rho_blocks'], out['cut_blocks'] = cut(n_blocks, merge=True)
         if n_sub and n_blocks < n_sub < n:
             out['sub'], out['rho_sub'], out['cut_sub'] = cut(n_sub)
     return out
@@ -328,6 +396,9 @@ def plot_dendrogram(res, title, out_path, residual=False):
             "bloques de la matriz de correlación.")
     if residual:
         note += " Los grupos se calcularon quitando el factor de mercado común."
+        if res.get('inverse_used'):
+            note += (f" Los inversos/volatilidad ({', '.join(res['inverse_used'])}) se agrupan aparte "
+                     "(su distancia al resto se fija en el máximo).")
     note = textwrap.fill(note, width=125)
     fig.text(0.03, 0.012, note, ha='left', va='bottom', fontsize=9, color=TEXT_COLOR, alpha=0.8,
              linespacing=1.4)
@@ -347,7 +418,8 @@ def plot_dendrogram(res, title, out_path, residual=False):
 
 def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
                      annotate=None, n_blocks=None, footnote=True, n_subblocks=None,
-                     residual=False, dendrogram_path=None, csv_path=None):
+                     residual=False, dendrogram_path=None, csv_path=None,
+                     inverse=None, min_block_size=None):
     """
     footnote:   texto explicativo al pie sobre cómo leer el gráfico (default: True)
     annotate:   mostrar los números en cada celda (default: True si hay <=30 tickers)
@@ -361,6 +433,9 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
                 sigue mostrando la correlación original.
     dendrogram_path: si se indica, guarda además el dendrograma en ese PNG (default: None = no)
     csv_path:   si se indica, guarda un CSV ticker -> bloque/subbloque (default: None = no)
+    inverse:    inversos/volatilidad que se agrupan aparte en modo residual (default: INVERSE_TICKERS;
+                [] = ninguno)
+    min_block_size: bloques con menos tickers se fusionan con el vecino más cercano (default 2; 1 = no)
     El tamaño de la figura y de las fuentes escala con la cantidad de tickers.
     """
     n = len(corr_matrix)
@@ -370,7 +445,8 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     blocks = sub = rho_blocks = rho_sub = None
     res = None
     if cluster or dendrogram_path or csv_path:
-        res = _order_by_clustering(corr_matrix, n_blocks, n_subblocks, residual)
+        res = _order_by_clustering(corr_matrix, n_blocks, n_subblocks, residual,
+                                   inverse=inverse, min_block_size=min_block_size)
     if cluster:
         corr_matrix, blocks, sub = res['corr'], res['blocks'], res['sub']
         rho_blocks, rho_sub = res['rho_blocks'], res['rho_sub']
@@ -523,10 +599,11 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         if cluster:
             parts.append("Los tickers están ordenados por similitud.")
             if residual:
-                parts.append(
-                    "Los grupos se calcularon quitando el factor de mercado común, para que se vea "
-                    "la estructura interna; los colores de la matriz muestran la correlación original."
-                )
+                _txt = ("Los grupos se calcularon quitando el factor de mercado común, para que se vea "
+                        "la estructura interna; los colores de la matriz muestran la correlación original.")
+                if res is not None and res.get('inverse_used'):
+                    _txt += f" Los inversos/volatilidad ({', '.join(res['inverse_used'])}) se agrupan aparte."
+                parts.append(_txt)
             if blocks is not None:
                 parts.append(
                     "Las líneas gruesas separan grupos de ETFs con una correlación promedio de "
@@ -598,6 +675,10 @@ def main():
     parser.add_argument('--n_subblocks', type=int, default=None, help='Cantidad de subbloques (líneas finas); omitir = sin subbloques')
     parser.add_argument('--residual', action='store_true',
                         help='Agrupar sobre la correlación sin el factor de mercado (la matriz muestra la correlación original)')
+    parser.add_argument('--inverse', nargs='*', default=None,
+                        help='Inversos/volatilidad que se agrupan aparte con --residual (default: VXX SH PSQ; sin valores = ninguno)')
+    parser.add_argument('--min_block_size', type=int, default=None,
+                        help='Bloques con menos tickers se fusionan con el vecino (default 2; 1 = no fusionar)')
     parser.add_argument('--dendrogram', action='store_true',
                         help=f'Generar además el dendrograma en un PNG aparte ({DENDROGRAM_FILE})')
     parser.add_argument('--csv', action='store_true',
@@ -613,6 +694,7 @@ def main():
         # Las salidas opcionales se imprimen antes, para que la línea |ruta| siga siendo la última
         path = plot_correlation(corr_matrix, args.title, n_blocks=args.n_blocks,
                                 n_subblocks=args.n_subblocks, residual=args.residual,
+                                inverse=args.inverse, min_block_size=args.min_block_size,
                                 dendrogram_path=DENDROGRAM_FILE if args.dendrogram else None,
                                 csv_path=CLUSTERS_CSV_FILE if args.csv else None)
         print(f"|{path}|")
@@ -621,13 +703,16 @@ def main():
         sys.exit(1)
 
 def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None, n_subblocks=None,
-                    residual=False, dendrogram=False, csv=False):
+                    residual=False, dendrogram=False, csv=False,
+                    inverse=None, min_block_size=None):
     """Wrapper for Streamlit: builds correlation heatmap.
     n_blocks:    None/0 = automático; N = cantidad de bloques marcados con líneas gruesas.
     n_subblocks: None/0 = sin subbloques; N = cantidad de subbloques (líneas finas), mayor que los bloques.
     residual:    True = agrupar sobre la correlación sin el factor de mercado.
     dendrogram:  True = además guarda el dendrograma en os.path.abspath(DENDROGRAM_FILE).
     csv:         True = además guarda el CSV de clusters en os.path.abspath(CLUSTERS_CSV_FILE).
+    inverse:     inversos/volatilidad que se agrupan aparte con residual (None = VXX, SH, PSQ; [] = ninguno).
+    min_block_size: bloques con menos tickers se fusionan con el vecino (None = 2; 1 = no fusionar).
     Devuelve siempre la ruta del heatmap (los archivos opcionales quedan en las rutas indicadas)."""
     unique_tickers = list(dict.fromkeys([t.upper() for t in tickers]))
     corr_matrix = get_data_and_corr(unique_tickers, start_year)
@@ -635,6 +720,7 @@ def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None, n
         return None
     path = plot_correlation(corr_matrix, title, n_blocks=(n_blocks or None),
                             n_subblocks=(n_subblocks or None), residual=residual,
+                            inverse=inverse, min_block_size=min_block_size,
                             dendrogram_path=DENDROGRAM_FILE if dendrogram else None,
                             csv_path=CLUSTERS_CSV_FILE if csv else None)
     return path
