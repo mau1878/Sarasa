@@ -1,4 +1,5 @@
 import argparse
+import warnings
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -30,6 +31,9 @@ DARK_DIVERGING = sns.diverging_palette(
 
 YEARS_BACK = 5
 OUTPUT_FILE = "correlation_temp.png"
+# Salidas opcionales (se generan solo si se piden)
+DENDROGRAM_FILE = "dendrogram_temp.png"
+CLUSTERS_CSV_FILE = "clusters_temp.csv"
 
 # Con más tickers que esto, los números se omiten por defecto (no se leen en un feed/celular)
 ANNOT_MAX_TICKERS = 30
@@ -43,6 +47,8 @@ SUB_LINE_WIDTH = 1.2
 # Cada bloque usa un par (tono pleno, tono apagado): el pleno y el apagado se alternan entre
 # los subbloques de ese bloque; el par cambia entre bloques consecutivos
 BLOCK_LABEL_COLORS = ((TEXT_COLOR, '#8f96d8'), ('#ffaa60', '#c97b3c'))
+# Ramas del dendrograma por encima del corte de bloques
+DENDRO_ABOVE_COLOR = '#6a6a8a'
 
 
 def get_data_and_corr(tickers, start_year=None):
@@ -88,45 +94,104 @@ def get_data_and_corr(tickers, start_year=None):
     return corr_matrix
 
 
-def _order_by_clustering(corr, n_blocks=None, n_sub=None):
+def _remove_market_mode(c):
+    """
+    Quita el primer componente (factor de mercado común) de una matriz de correlación y la
+    renormaliza. Se usa solo para agrupar: el gráfico sigue mostrando la correlación original.
+    """
+    w, v = np.linalg.eigh(c)            # autovalores en orden ascendente: el último es el mayor
+    c_res = c - w[-1] * np.outer(v[:, -1], v[:, -1])
+    d = np.sqrt(np.clip(np.diag(c_res), 1e-12, None))
+    return np.clip(c_res / np.outer(d, d), -1, 1)
+
+
+def _inter_rho(corr, labels):
+    """
+    Mayor correlación promedio entre dos grupos distintos (sobre la correlación original).
+    Es el número real detrás de "grupos con correlación promedio de ~X o menos entre sí".
+    """
+    c = corr.values
+    labels = np.asarray(labels)
+    ids = np.unique(labels)
+    best = -1.0
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                m = np.nanmean(c[np.ix_(labels == a, labels == b)])
+            if np.isfinite(m):
+                best = max(best, float(m))
+    return round(best, 2)
+
+
+def _order_by_clustering(corr, n_blocks=None, n_sub=None, residual=False):
     """
     Reordena tickers por clustering jerárquico (los que se parecen quedan juntos) y define
     dos niveles de agrupación anidados: bloques (corte alto del árbol) y subbloques (corte más bajo).
     Devuelve un dict con:
       corr:       matriz reordenada
       blocks/sub: ids de grupo por ticker en el nuevo orden (None si ese nivel no se pidió)
-      rho_blocks/rho_sub: correlación promedio aproximada a la que se hizo cada corte
+      rho_blocks/rho_sub: mayor correlación promedio entre dos grupos distintos de ese nivel
+      Z/order/names: linkage, orden de hojas y nombres originales (para el dendrograma)
+      cut_blocks/cut_sub: altura (distancia) del corte de cada nivel
     n_blocks: None = automático (~n/7, entre 3 y 10); 0 = sin bloques.
     n_sub:    None/0 = sin subbloques; N = cantidad de subbloques (debe ser mayor que los bloques).
+    residual: True = agrupar sobre la correlación sin el factor de mercado (el primer componente),
+              para que aparezca la estructura interna (sectores, países, bonos, etc.).
     """
-    out = {'corr': corr, 'blocks': None, 'sub': None, 'rho_blocks': None, 'rho_sub': None}
+    out = {'corr': corr, 'blocks': None, 'sub': None, 'rho_blocks': None, 'rho_sub': None,
+           'Z': None, 'order': None, 'names': list(corr.index),
+           'cut_blocks': None, 'cut_sub': None}
     try:
-        from scipy.cluster.hierarchy import linkage, leaves_list, fcluster
+        from scipy.cluster.hierarchy import linkage, leaves_list, fcluster, optimal_leaf_ordering
         from scipy.spatial.distance import squareform
     except ImportError:
         return out
     n = len(corr)
     c = corr.fillna(0).values
+    if residual:
+        c = _remove_market_mode(c)
     dist = np.sqrt(np.clip(0.5 * (1 - c), 0, None))   # corr 1 -> 0, corr -1 -> 1
     np.fill_diagonal(dist, 0)
     dist = (dist + dist.T) / 2
-    Z = linkage(squareform(dist, checks=False), method='average')
+    cond = squareform(dist, checks=False)
+    Z = linkage(cond, method='average')
+    try:
+        Z = optimal_leaf_ordering(Z, cond)             # hojas contiguas más parecidas entre sí
+    except Exception:
+        pass
     order = leaves_list(Z)
     out['corr'] = corr.iloc[order, order]
+    out['Z'], out['order'] = Z, order
 
     def cut(k):
         labels = fcluster(Z, t=k, criterion='maxclust')[order]
         # altura del corte: entre la última fusión hecha y la primera deshecha
         h = 0.5 * (Z[n - 1 - k, 2] + Z[n - k, 2])
-        return labels, round(float(1 - 2 * h * h), 2)   # distancia -> correlación equivalente
+        return labels, _inter_rho(out['corr'], labels), float(h)
 
     if n_blocks is None:
         n_blocks = int(np.clip(round(n / 7), 3, 10))
     if n_blocks and 1 < n_blocks < n:
-        out['blocks'], out['rho_blocks'] = cut(n_blocks)
+        out['blocks'], out['rho_blocks'], out['cut_blocks'] = cut(n_blocks)
         if n_sub and n_blocks < n_sub < n:
-            out['sub'], out['rho_sub'] = cut(n_sub)
+            out['sub'], out['rho_sub'], out['cut_sub'] = cut(n_sub)
     return out
+
+
+def _label_colors(n, blocks, sub):
+    """Color de etiqueta por ticker (en orden): dos colores alternados por bloque y, dentro de
+    cada bloque, variación leve de tono entre subbloques consecutivos."""
+    cols = []
+    blk_idx, sub_idx = 0, 0
+    for i in range(n):
+        if i > 0 and blocks[i] != blocks[i - 1]:
+            blk_idx += 1
+            sub_idx = 0
+        elif i > 0 and sub is not None and sub[i] != sub[i - 1]:
+            sub_idx += 1
+        cols.append(BLOCK_LABEL_COLORS[blk_idx % 2][sub_idx % 2])
+    return cols
 
 
 def _draw_boundaries(ax, bounds, n, upper_masked, **kw):
@@ -154,8 +219,135 @@ def _short_fmt(v):
     return s
 
 
+def _save_clusters_csv(res, path):
+    """CSV ticker -> bloque / subbloque (numerados en orden de aparición) y correlación
+    promedio dentro de cada bloque (sobre la correlación original)."""
+    c = res['corr']
+    df = pd.DataFrame({'ticker': list(c.index)})
+    for col, lab in (('bloque', res['blocks']), ('subbloque', res['sub'])):
+        if lab is not None:
+            ids = {v: i + 1 for i, v in enumerate(dict.fromkeys(lab))}
+            df[col] = [ids[v] for v in lab]
+    if res['blocks'] is not None:
+        lab = np.asarray(res['blocks'])
+        m = c.values
+        rho = {}
+        for l in np.unique(lab):
+            idx = np.where(lab == l)[0]
+            if len(idx) < 2:
+                rho[l] = np.nan
+            else:
+                off = m[np.ix_(idx, idx)][~np.eye(len(idx), dtype=bool)]
+                rho[l] = round(float(np.nanmean(off)), 2)
+        df['rho_prom_intrabloque'] = [rho[l] for l in lab]
+    df.to_csv(path, index=False)
+    return path
+
+
+def plot_dendrogram(res, title, out_path, residual=False):
+    """
+    Dendrograma del clustering jerárquico en un PNG aparte, mismo estilo oscuro que la matriz.
+    Los colores de ramas (bloques) y de tickers coinciden con los de la matriz de correlación;
+    las líneas punteadas marcan los cortes de bloques y subbloques.
+    """
+    from scipy.cluster.hierarchy import dendrogram
+    Z, order, names = res['Z'], res['order'], res['names']
+    n = len(names)
+    ordered = [names[i] for i in order]
+    blocks, sub = res['blocks'], res['sub']
+
+    if blocks is not None:
+        label_cols = _label_colors(n, blocks, sub)
+        # color de rama por bloque (tono pleno), según orden de aparición
+        blk_color = {}
+        for lab in blocks:
+            if lab not in blk_color:
+                blk_color[lab] = BLOCK_LABEL_COLORS[len(blk_color) % 2][0]
+        blk_orig = np.empty(n, dtype=blocks.dtype)
+        blk_orig[order] = blocks
+        rep = list(range(n))                    # una hoja representativa por cada nodo
+        for j in range(n - 1):
+            rep.append(rep[int(Z[j, 0])])
+        h_cut = res['cut_blocks']
+
+        def link_color_func(k):
+            if Z[k - n, 2] <= h_cut:
+                return blk_color[blk_orig[rep[k]]]
+            return DENDRO_ABOVE_COLOR
+    else:
+        label_cols = [TEXT_COLOR] * n
+
+        def link_color_func(k):
+            return '#8f96d8'
+    color_of = dict(zip(ordered, label_cols))
+
+    fig_w = 11
+    fig_h = max(6.0, 0.2 * n + 2.8)
+    fs = float(np.clip(fig_h * 72 * 0.8 / n * 0.7, 6, 11))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=PAPER_COLOR)
+    ax.set_facecolor(BG_COLOR)
+
+    dendrogram(Z, orientation='right', labels=names, link_color_func=link_color_func,
+               leaf_font_size=fs, ax=ax)
+    ax.invert_yaxis()                           # mismo orden de arriba hacia abajo que la matriz
+
+    ax.tick_params(axis='both', colors=TEXT_COLOR)
+    for lbl in ax.get_yticklabels():
+        lbl.set_color(color_of.get(lbl.get_text(), TEXT_COLOR))
+    for sp in ax.spines.values():
+        sp.set_color(GRID_COLOR)
+    ax.grid(axis='x', color=GRID_COLOR, lw=0.6)
+    ax.set_axisbelow(True)
+
+    if res['cut_blocks'] is not None:
+        ax.axvline(res['cut_blocks'], color=BLOCK_LINE_COLOR, lw=1.4, ls='--')
+    if res['cut_sub'] is not None:
+        ax.axvline(res['cut_sub'], color=SUB_LINE_COLOR, lw=1.0, ls=':')
+
+    xl = "Distancia  d = √(½·(1 − ρ))"
+    if residual:
+        xl += "   (sobre la correlación sin factor de mercado)"
+    ax.set_xlabel(xl, color=TEXT_COLOR, fontsize=11, labelpad=10)
+    title_pad = 14
+    if not residual:
+        # eje superior con la correlación equivalente (solo tiene sentido sobre la correlación original)
+        sec = ax.secondary_xaxis(
+            'top',
+            functions=(lambda d: 1 - 2 * np.asarray(d, dtype=float) ** 2,
+                       lambda r: np.sqrt(np.clip((1 - np.asarray(r, dtype=float)) / 2, 0, None))))
+        sec.set_xlabel("Correlación equivalente (ρ)", color=TEXT_COLOR, fontsize=10, labelpad=6)
+        sec.tick_params(colors=TEXT_COLOR)
+        title_pad = 38
+    ax.set_title(f"Dendrograma de Correlación: {title}\n(agrupamiento jerárquico, enlace promedio)",
+                 fontsize=15, color=TEXT_COLOR, weight='bold', pad=title_pad)
+
+    import textwrap
+    note = ("Cómo leerlo: cada rama une ETFs o grupos; mientras más corta la rama (más a la izquierda), "
+            "más parecido es su comportamiento. Línea punteada gruesa: corte de bloques; línea punteada "
+            "fina: corte de subbloques. Los colores de las ramas y de los tickers coinciden con los "
+            "bloques de la matriz de correlación.")
+    if residual:
+        note += " Los grupos se calcularon quitando el factor de mercado común."
+    note = textwrap.fill(note, width=125)
+    fig.text(0.03, 0.012, note, ha='left', va='bottom', fontsize=9, color=TEXT_COLOR, alpha=0.8,
+             linespacing=1.4)
+    n_lines = note.count("\n") + 1
+    plt.tight_layout(pad=1.8, rect=(0, (0.35 + 0.17 * n_lines) / fig_h, 1, 1))
+
+    fig.text(0.5, 0.5, "MTaurus - X: @MTaurus_ok", fontsize=44, color=WATERMARK_COLOR,
+             ha='center', va='center', rotation=30, weight='bold')
+    fig.text(0.98, 0.012, f"Generado: {datetime.now().strftime('%Y-%m-%d')}", ha='right', va='bottom',
+             fontsize=9, color='gray', alpha=0.65)
+
+    abs_path = os.path.abspath(out_path)
+    fig.savefig(abs_path, dpi=200, bbox_inches='tight', facecolor=PAPER_COLOR)
+    plt.close(fig)
+    return abs_path
+
+
 def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
-                     annotate=None, n_blocks=None, footnote=True, n_subblocks=None):
+                     annotate=None, n_blocks=None, footnote=True, n_subblocks=None,
+                     residual=False, dendrogram_path=None, csv_path=None):
     """
     footnote:   texto explicativo al pie sobre cómo leer el gráfico (default: True)
     annotate:   mostrar los números en cada celda (default: True si hay <=30 tickers)
@@ -165,6 +357,10 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
                 debe ser mayor que la cantidad de bloques)
     cluster:    reordenar por similitud (default: True si hay >12 tickers)
     mask_upper: mostrar solo el triángulo inferior (default: False, matriz cuadrada completa)
+    residual:   agrupar sobre la correlación sin el factor de mercado (default: False). La matriz
+                sigue mostrando la correlación original.
+    dendrogram_path: si se indica, guarda además el dendrograma en ese PNG (default: None = no)
+    csv_path:   si se indica, guarda un CSV ticker -> bloque/subbloque (default: None = no)
     El tamaño de la figura y de las fuentes escala con la cantidad de tickers.
     """
     n = len(corr_matrix)
@@ -172,8 +368,10 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     if cluster is None:
         cluster = n > 12
     blocks = sub = rho_blocks = rho_sub = None
+    res = None
+    if cluster or dendrogram_path or csv_path:
+        res = _order_by_clustering(corr_matrix, n_blocks, n_subblocks, residual)
     if cluster:
-        res = _order_by_clustering(corr_matrix, n_blocks, n_subblocks)
         corr_matrix, blocks, sub = res['corr'], res['blocks'], res['sub']
         rho_blocks, rho_sub = res['rho_blocks'], res['rho_sub']
     if mask_upper is None:
@@ -275,15 +473,7 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     # Etiquetas coloreadas por bloque (dos colores alternados) y, dentro de cada bloque,
     # por subbloque (variación leve de tono entre subbloques consecutivos)
     if blocks is not None:
-        label_cols = []
-        blk_idx, sub_idx = 0, 0
-        for i in range(n):
-            if i > 0 and blocks[i] != blocks[i - 1]:
-                blk_idx += 1
-                sub_idx = 0
-            elif i > 0 and sub is not None and sub[i] != sub[i - 1]:
-                sub_idx += 1
-            label_cols.append(BLOCK_LABEL_COLORS[blk_idx % 2][sub_idx % 2])
+        label_cols = _label_colors(n, blocks, sub)
         for axis in (ax.xaxis, ax.yaxis):
             for i, tick in enumerate(axis.get_major_ticks()):
                 tick.label1.set_color(label_cols[i])
@@ -327,11 +517,16 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
         import textwrap
         parts = [
             "Cómo leerlo: cada celda es la correlación (Pearson) entre los retornos diarios "
-            "de dos ETFs. Verde (hacia +1): tienden a moverse juntos. Rojo (hacia −1): tienden "
+            "de dos ETFs. Verde (hacia +1): tienden a moverse juntos. Rojo (hacia −1): tienden "
             "a moverse en sentido contrario. Oscuro (cerca de 0): sin relación clara."
         ]
         if cluster:
             parts.append("Los tickers están ordenados por similitud.")
+            if residual:
+                parts.append(
+                    "Los grupos se calcularon quitando el factor de mercado común, para que se vea "
+                    "la estructura interna; los colores de la matriz muestran la correlación original."
+                )
             if blocks is not None:
                 parts.append(
                     "Las líneas gruesas separan grupos de ETFs con una correlación promedio de "
@@ -380,6 +575,17 @@ def plot_correlation(corr_matrix, title, cluster=None, mask_upper=None,
     plt.savefig(abs_path, dpi=dpi, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close(fig)
 
+    # Salidas opcionales (aparte de la matriz)
+    if (dendrogram_path or csv_path) and (res is None or res.get('Z') is None):
+        print("⚠️ No se pudo generar el dendrograma/CSV de clusters (falta scipy).")
+    else:
+        if dendrogram_path:
+            d_path = plot_dendrogram(res, title, dendrogram_path, residual)
+            print(f"Dendrograma: {d_path}")
+        if csv_path:
+            c_path = _save_clusters_csv(res, csv_path)
+            print(f"Clusters CSV: {os.path.abspath(c_path)}")
+
     return abs_path
 
 
@@ -390,6 +596,12 @@ def main():
     parser.add_argument('--start_year', type=int, default=None, help='Año de inicio (opcional)')
     parser.add_argument('--n_blocks', type=int, default=None, help='Cantidad de bloques (0 = sin líneas, omitir = automático)')
     parser.add_argument('--n_subblocks', type=int, default=None, help='Cantidad de subbloques (líneas finas); omitir = sin subbloques')
+    parser.add_argument('--residual', action='store_true',
+                        help='Agrupar sobre la correlación sin el factor de mercado (la matriz muestra la correlación original)')
+    parser.add_argument('--dendrogram', action='store_true',
+                        help=f'Generar además el dendrograma en un PNG aparte ({DENDROGRAM_FILE})')
+    parser.add_argument('--csv', action='store_true',
+                        help=f'Guardar además un CSV ticker -> bloque/subbloque ({CLUSTERS_CSV_FILE})')
     args = parser.parse_args()
 
     try:
@@ -398,23 +610,33 @@ def main():
         if corr_matrix is None or corr_matrix.empty:
             sys.exit(1)
 
+        # Las salidas opcionales se imprimen antes, para que la línea |ruta| siga siendo la última
         path = plot_correlation(corr_matrix, args.title, n_blocks=args.n_blocks,
-                                n_subblocks=args.n_subblocks)
+                                n_subblocks=args.n_subblocks, residual=args.residual,
+                                dendrogram_path=DENDROGRAM_FILE if args.dendrogram else None,
+                                csv_path=CLUSTERS_CSV_FILE if args.csv else None)
         print(f"|{path}|")
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
 
-def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None, n_subblocks=None):
+def run_correlation(tickers, title="Acciones", start_year=None, n_blocks=None, n_subblocks=None,
+                    residual=False, dendrogram=False, csv=False):
     """Wrapper for Streamlit: builds correlation heatmap.
     n_blocks:    None/0 = automático; N = cantidad de bloques marcados con líneas gruesas.
-    n_subblocks: None/0 = sin subbloques; N = cantidad de subbloques (líneas finas), mayor que los bloques."""
+    n_subblocks: None/0 = sin subbloques; N = cantidad de subbloques (líneas finas), mayor que los bloques.
+    residual:    True = agrupar sobre la correlación sin el factor de mercado.
+    dendrogram:  True = además guarda el dendrograma en os.path.abspath(DENDROGRAM_FILE).
+    csv:         True = además guarda el CSV de clusters en os.path.abspath(CLUSTERS_CSV_FILE).
+    Devuelve siempre la ruta del heatmap (los archivos opcionales quedan en las rutas indicadas)."""
     unique_tickers = list(dict.fromkeys([t.upper() for t in tickers]))
     corr_matrix = get_data_and_corr(unique_tickers, start_year)
     if corr_matrix is None or corr_matrix.empty:
         return None
     path = plot_correlation(corr_matrix, title, n_blocks=(n_blocks or None),
-                            n_subblocks=(n_subblocks or None))
+                            n_subblocks=(n_subblocks or None), residual=residual,
+                            dendrogram_path=DENDROGRAM_FILE if dendrogram else None,
+                            csv_path=CLUSTERS_CSV_FILE if csv else None)
     return path
 
 if __name__ == "__main__":
