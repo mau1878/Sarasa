@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from returns_evolution_plot import run_returns_evolution
 from performance_plot import run_performance
 from drawdown_plot import run_drawdown
-from correlation_plot import run_correlation, DENDROGRAM_FILE
+from correlation_plot import run_correlation, DENDROGRAM_FILE, CLUSTERS_CSV_FILE
 from portfolio_builder import render_portfolio_ui
 from heatmap_script import run_heatmap
 from inflation_adjusted_plot import (
@@ -681,6 +681,11 @@ elif tool == "Correlación":
     )
     tickers_str = st.text_input("Tickers manuales (coma)", "")
     custom_title = st.text_input("Título (opcional)", "")
+    corr_start = st.number_input(
+        "Año de inicio (0 = últimos 5 años)", min_value=0, max_value=datetime.now().year - 1, value=0, step=1,
+        help="Desde qué año se calculan las correlaciones (desde el 1 de enero de ese año). Probar con ventanas "
+             "distintas (por ejemplo 1, 3 y 5 años) sirve para ver qué grupos se mantienen estables.",
+    )
     corr_blocks = st.slider(
         "Bloques marcados con líneas gruesas (0 = automático)",
         min_value=0, max_value=20, value=0,
@@ -699,6 +704,22 @@ elif tool == "Correlación":
         "Generar también el dendrograma", value=False,
         help="Imagen aparte con el árbol del agrupamiento jerárquico.",
     )
+    with st.expander("Opciones avanzadas", expanded=False):
+        corr_inverse_txt = st.text_input(
+            "Inversos / volatilidad que se agrupan aparte (coma)", "VXX, SH, PSQ",
+            help="Solo se usa con 'Agrupar sin el factor de mercado'. Esos tickers se excluyen del cálculo del "
+                 "factor común y forman su propio bloque. Vacío = ninguno.",
+        )
+        corr_min_block = st.slider(
+            "Tamaño mínimo de un bloque", 1, 5, 2,
+            help="Los bloques con menos tickers que esto se fusionan con el bloque vecino más parecido. "
+                 "1 = no fusionar (los activos raros quedan aislados).",
+        )
+        corr_csv = st.checkbox(
+            "Generar también la tabla de grupos (CSV)", value=False,
+            help="Archivo descargable con el bloque y subbloque de cada ticker y la correlación promedio dentro "
+                 "de cada bloque.",
+        )
 
     if st.button("Generar matriz"):
         tickers = []
@@ -718,16 +739,29 @@ elif tool == "Correlación":
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
         else:
-            if os.path.exists(DENDROGRAM_FILE):
-                os.remove(DENDROGRAM_FILE)  # evita mostrar un dendrograma viejo si esta corrida falla
+            for _f in (DENDROGRAM_FILE, CLUSTERS_CSV_FILE):
+                if os.path.exists(_f):
+                    os.remove(_f)  # evita mostrar archivos viejos si esta corrida falla
+            inverse = [t.strip().upper() for t in corr_inverse_txt.replace(";", ",").split(",") if t.strip()]
             path = run_correlation(
-                tickers, title=title, n_blocks=corr_blocks, n_subblocks=corr_subblocks,
-                residual=corr_residual, dendrogram=corr_dendro,
+                tickers, title=title, start_year=(int(corr_start) or None),
+                n_blocks=corr_blocks, n_subblocks=corr_subblocks,
+                residual=corr_residual, dendrogram=corr_dendro, csv=corr_csv,
+                inverse=inverse, min_block_size=corr_min_block,
             )
             if path:
                 st.image(path, width="stretch")
                 if corr_dendro and os.path.exists(DENDROGRAM_FILE):
                     st.image(os.path.abspath(DENDROGRAM_FILE), width="stretch")
+                if corr_csv and os.path.exists(CLUSTERS_CSV_FILE):
+                    with open(CLUSTERS_CSV_FILE, "rb") as _fh:
+                        _csv_bytes = _fh.read()
+                    try:
+                        st.download_button("Descargar tabla de grupos (CSV)", _csv_bytes,
+                                           file_name="grupos_correlacion.csv", mime="text/csv", on_click="ignore")
+                    except Exception:  # versiones de Streamlit sin on_click="ignore"
+                        st.download_button("Descargar tabla de grupos (CSV)", _csv_bytes,
+                                           file_name="grupos_correlacion.csv", mime="text/csv")
             else:
                 st.warning("No se pudo generar la matriz.")
 
