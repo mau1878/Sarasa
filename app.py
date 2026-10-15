@@ -673,9 +673,12 @@ elif tool == "Drawdown":
 # ---- Correlación ----
 elif tool == "Correlación":
     groups = load_correlation_groups()
-    group_titles = ["(ninguno)"] + [g["title"] for g in groups]
+    group_titles = [g["title"] for g in groups]
 
-    selected_group = st.selectbox("Grupo predefinido (correlationgroups.json)", group_titles)
+    selected_groups = st.multiselect(
+        "Grupos predefinidos (correlationgroups.json)", group_titles,
+        help="Podés elegir más de uno: se combinan en una sola matriz (sin tickers repetidos).",
+    )
     tickers_str = st.text_input("Tickers manuales (coma)", "")
     custom_title = st.text_input("Título (opcional)", "")
     corr_blocks = st.slider(
@@ -701,15 +704,15 @@ elif tool == "Correlación":
         tickers = []
         title = custom_title or "Acciones"
 
-        if selected_group != "(ninguno)":
-            g = next(g for g in groups if g["title"] == selected_group)
-            tickers = g["tickers"]
+        if selected_groups:
+            chosen = [g for g in groups if g["title"] in selected_groups]
+            tickers = list(dict.fromkeys(t.upper() for g in chosen for t in g["tickers"]))
             if not custom_title:
-                title = g["title"]
+                title = " + ".join(g["title"] for g in chosen)
 
         if tickers_str.strip():
             tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
-            if not custom_title and selected_group == "(ninguno)":
+            if not custom_title and not selected_groups:
                 title = "Custom"
 
         if not tickers:
