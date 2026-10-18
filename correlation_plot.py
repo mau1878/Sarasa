@@ -11,12 +11,9 @@ import sys
 from datetime import datetime, timedelta
 
 # ================= CONFIG - DARK THEME =================
-BG_COLOR = '#0f0f1a'           # Main plot background
-PAPER_COLOR = '#05050f'        # Figure background
-TEXT_COLOR = '#e0e0ff'         # Soft light text
-GRID_COLOR = '#2a2a3a'         # Very subtle grid
-ANNOT_COLOR = '#ffffff'        # Bold annotations (Pure white for max contrast)
-WATERMARK_COLOR = (140/255, 140/255, 180/255, 0.11)  # RGBA tuple
+from mtaurus_style import BG_COLOR, PAPER_COLOR, TEXT_COLOR, ANNOT_COLOR  # noqa: E402  (paleta compartida)
+GRID_COLOR = '#2a2a3a'         # Very subtle grid (propio de este gráfico)
+WATERMARK_COLOR = (140/255, 140/255, 180/255, 0.11)  # RGBA tuple (propio: alpha 0.11)
 
 # Red (Negative) <-> Green (Positive), center dark so white text is readable
 DARK_DIVERGING = sns.diverging_palette(
