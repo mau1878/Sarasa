@@ -19,7 +19,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 from mtaurus_style import (  # noqa: E402  (paleta compartida)
     BG_COLOR, PAPER_COLOR, TEXT_COLOR, TICK_COLOR, GRID_COLOR, WATERMARK_COLOR, ZERO_LINE_COLOR, DIV_COLORS,
 )
-TICKER_FONT_BOOST = 3   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
+TICKER_FONT_BOOST = 2   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
 LABEL_GAP_PT = 5        # separación entre ticker y valor
 plt.style.use('dark_background')
 
@@ -132,13 +132,13 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
 
     # Tamaño de la etiqueta (ticker + valor) según cantidad de barras
     if num_bars > 50:
-        label_fs = 10
-    elif num_bars > 40:
-        label_fs = 11
-    elif num_bars > 25:
         label_fs = 12
-    else:
+    elif num_bars > 40:
+        label_fs = 12.5
+    elif num_bars > 25:
         label_fs = 13
+    else:
+        label_fs = 14
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=PAPER_COLOR)
     ax.set_facecolor(BG_COLOR)
@@ -172,20 +172,28 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     ax.set_xlim(-0.7, num_bars - 0.3)
     ax.set_xticks([])  # el ticker ya está en la etiqueta de cada barra
 
-    fig.suptitle(f"{title}\n{period_label}", fontsize=22, color=TEXT_COLOR, fontweight='bold', y=0.99)
-    ax.set_ylabel("Retorno (%)", fontsize=13, color=TEXT_COLOR, labelpad=12)
+    # Título y subtítulo anclados al eje (centrados sobre las barras, separación fija en puntos)
+    ax.annotate(title, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 46), textcoords='offset points',
+                ha='center', va='bottom', fontsize=22, fontweight='bold', color=TEXT_COLOR,
+                annotation_clip=False)
+    ax.annotate(period_label, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 18), textcoords='offset points',
+                ha='center', va='bottom', fontsize=15, color=TICK_COLOR, annotation_clip=False)
+
+    ax.set_ylabel("Retorno (%)", fontsize=14, color=TEXT_COLOR, labelpad=12)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0f}%'))
-    ax.tick_params(axis='y', colors=TICK_COLOR, labelsize=12)
+    ax.tick_params(axis='y', colors=TICK_COLOR, labelsize=14)
 
-    ax.spines[['top', 'right']].set_visible(False)
-    for side in ('left', 'bottom'):
-        ax.spines[side].set_color(TEXT_COLOR)
-        ax.spines[side].set_linewidth(0.8)
+    # Sin spine inferior: no marca nada (el cero lo marca la línea roja)
+    ax.spines[['top', 'right', 'bottom']].set_visible(False)
+    ax.spines['left'].set_color(TEXT_COLOR)
+    ax.spines['left'].set_linewidth(0.8)
 
-    fig.text(0.5, 0.5, '@MTaurus_ok', fontsize=90, color=WATERMARK_COLOR,
-             ha='center', va='center', rotation=30, zorder=999)
+    ax.text(0.5, 0.5, '@MTaurus_ok', transform=ax.transAxes, fontsize=90, color=WATERMARK_COLOR,
+            ha='center', va='center', rotation=30, zorder=999)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.965])
+    # Márgenes fijos (no tight_layout): así el tamaño del eje no depende de las etiquetas
+    # y el ajuste del eje Y de más abajo converge siempre igual.
+    fig.subplots_adjust(left=0.06, right=0.995, top=0.89, bottom=0.03)
 
     # Ajustar el eje Y midiendo el espacio real que ocupan las etiquetas
     # (están en puntos, no en unidades de datos, así que se itera hasta converger)
