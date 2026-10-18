@@ -17,6 +17,8 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # ===================== CONFIG =====================
 BG_COLOR = '#1a1a1a'
 TEXT_COLOR = 'white'
+TICKER_FONT_BOOST = 3   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
+LABEL_GAP_PT = 5        # separación entre ticker y valor
 plt.style.use('dark_background')
 
 # ==================== DIVIDENDS ADJUSTMENTS ====================
@@ -141,25 +143,21 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     xs = list(range(num_bars))
     bars = ax.bar(xs, df['Return'], color=palette_colors, width=0.8, zorder=3)
 
-    # Etiquetas ticker + valor, pegadas al extremo de cada barra (arriba si >=0, abajo si <0)
-    annotations = []
+    # Etiquetas pegadas al extremo de cada barra (arriba si >=0, abajo si <0).
+    # El ticker va más grande que el valor; se leen de abajo hacia arriba: "TICKER  valor%".
+    ticker_fs = label_fs + TICKER_FONT_BOOST
+    pairs = []  # (ticker_ann, value_ann, positive)
     for x, name, value in zip(xs, df['Display Name'], df['Return']):
         positive = value >= 0
-        ann = ax.annotate(
-            f'{name}  {value:.1f}%',
-            xy=(x, value),
-            xytext=(0, 4 if positive else -4),
-            textcoords='offset points',
-            ha='center',
-            va='bottom' if positive else 'top',
-            rotation=90,
-            color=TEXT_COLOR,
-            fontsize=label_fs,
-            fontweight='bold',
-            zorder=5,
-            annotation_clip=False,
+        sign = 1 if positive else -1
+        common = dict(
+            xy=(x, value), textcoords='offset points', ha='center',
+            va='bottom' if positive else 'top', rotation=90,
+            color=TEXT_COLOR, fontweight='bold', zorder=5, annotation_clip=False,
         )
-        annotations.append((ann, positive))
+        t_ann = ax.annotate(name, xytext=(0, 4 * sign), fontsize=ticker_fs, **common)
+        v_ann = ax.annotate(f'{value:.1f}%', xytext=(0, 4 * sign), fontsize=label_fs, **common)
+        pairs.append((t_ann, v_ann, positive))
 
     ax.axhline(0, color='white', linewidth=2, alpha=0.8, linestyle='-', zorder=4)
     for x in range(num_bars - 1):
@@ -183,6 +181,19 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
 
     # Ajustar el eje Y midiendo el espacio real que ocupan las etiquetas
     # (están en puntos, no en unidades de datos, así que se itera hasta converger)
+    # 1) Apilar ticker y valor según el largo real de cada texto (en puntos)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    px_to_pt = 72.0 / fig.dpi
+    for t_ann, v_ann, positive in pairs:
+        t_len = t_ann.get_window_extent(renderer).height * px_to_pt
+        v_len = v_ann.get_window_extent(renderer).height * px_to_pt
+        if positive:   # ticker junto a la barra, valor encima
+            v_ann.xyann = (0, 4 + t_len + LABEL_GAP_PT)
+        else:          # valor junto a la barra, ticker más abajo
+            t_ann.xyann = (0, -(4 + v_len + LABEL_GAP_PT))
+
+    # 2) Ajustar el eje Y a ese espacio
     y_pad = (vmax - vmin) * 0.03
     ax.set_ylim(vmin - y_pad, vmax + y_pad)
     for _ in range(4):
@@ -190,14 +201,15 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
         renderer = fig.canvas.get_renderer()
         inv = ax.transData.inverted()
         top, bottom = vmax, vmin
-        for ann, positive in annotations:
-            bb = ann.get_window_extent(renderer)
-            y_lo = inv.transform((bb.x0, bb.y0))[1]
-            y_hi = inv.transform((bb.x0, bb.y1))[1]
-            if positive:
-                top = max(top, y_hi)
-            else:
-                bottom = min(bottom, y_lo)
+        for t_ann, v_ann, positive in pairs:
+            for ann in (t_ann, v_ann):
+                bb = ann.get_window_extent(renderer)
+                y_lo = inv.transform((bb.x0, bb.y0))[1]
+                y_hi = inv.transform((bb.x0, bb.y1))[1]
+                if positive:
+                    top = max(top, y_hi)
+                else:
+                    bottom = min(bottom, y_lo)
         span = top - bottom
         ax.set_ylim(bottom - span * 0.02, top + span * 0.02)
 
