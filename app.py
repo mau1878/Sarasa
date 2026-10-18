@@ -622,7 +622,14 @@ elif tool == "Performance":
         )
     
     adjust_ccl = st.checkbox("Ajustar por USD CCL (YPFD.BA/YPF)", False)
-    
+
+    orientation_label = st.selectbox(
+        "Orientación",
+        ["Automática", "Horizontal", "Vertical"],
+        help="Automática: horizontal hasta ~35 barras (más legible, formato más alto), vertical con más.",
+    )
+    orientation = {"Automática": "auto", "Horizontal": "horizontal", "Vertical": "vertical"}[orientation_label]
+
     if st.button("Generar gráfico"):
         tickers = []
         group_name = "Activos"
@@ -649,7 +656,8 @@ elif tool == "Performance":
                 group_name=group_name,
                 tickers_file=TICKERGROUPSFILE,
                 ccl_adjust=adjust_ccl,
-                custom_start_date=custom_start_date  # ← NEW
+                custom_start_date=custom_start_date,  # ← NEW
+                orientation=orientation
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
