@@ -17,23 +17,15 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= DARK THEME CONFIG =================
-BG_COLOR = '#0f0f1a'
-PAPER_COLOR = '#05050f'
-TEXT_COLOR = '#e0e0ff'
-TICK_COLOR = '#c0c0ff'
-ANNOT_COLOR = '#ffffff'
-WATERMARK_COLOR = (140 / 255, 140 / 255, 180 / 255, 0.09)
+# ================= DARK THEME CONFIG (paleta compartida: mtaurus_style.py) =================
+from mtaurus_style import (  # noqa: E402
+    BG_COLOR, PAPER_COLOR, TEXT_COLOR, TICK_COLOR, ANNOT_COLOR, WATERMARK_COLOR, DIV_COLORS,
+)
 
 
 def get_custom_cmap_dark():
     """Diverging colormap principal (mes/trimestre)."""
-    colors = [
-        (0.7, 0.15, 0.15),   # deep red
-        (0.3, 0.3, 0.35),    # near neutral dark
-        (0.15, 0.6, 0.25)    # deep green
-    ]
-    return LinearSegmentedColormap.from_list('custom_div_dark', colors, N=256)
+    return LinearSegmentedColormap.from_list('custom_div_dark', DIV_COLORS, N=256)
 
 
 def get_yearly_cmap_dark():
