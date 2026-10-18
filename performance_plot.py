@@ -21,6 +21,7 @@ from mtaurus_style import (  # noqa: E402  (paleta compartida)
 )
 TICKER_FONT_BOOST = 2   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
 LABEL_GAP_PT = 5        # separación entre ticker y valor
+AUTO_HORIZONTAL_MAX = 35  # orientation='auto': horizontal hasta esta cantidad de barras, vertical por encima
 plt.style.use('dark_background')
 
 # ==================== DIVIDENDS ADJUSTMENTS ====================
@@ -107,7 +108,15 @@ def calculate_performance(data, reference_prices=None):
     returns = ((last_price - first_price) / first_price) * 100
     return returns.sort_values(ascending=False)
 
-def create_bar_plot(performance, title, period_label, name_mapping, filename="performance_chart.png"):
+def create_bar_plot(performance, title, period_label, name_mapping,
+                    filename="performance_chart.png", orientation="auto"):
+    """Gráfico de barras de performance.
+
+    orientation:
+      'vertical'   barras verticales, etiquetas rotadas 90° (apaisado, mejor con muchas barras)
+      'horizontal' barras horizontales, texto horizontal (más alto que ancho, mejor con pocas/medianas)
+      'auto'       horizontal hasta AUTO_HORIZONTAL_MAX barras, vertical por encima
+    """
     if performance.empty:
         return None
     df = performance.to_frame(name='Return')
@@ -126,51 +135,93 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     palette_colors = [cmap(norm(v)) for v in df['Return']]
 
     num_bars = len(df)
-    calculated_width = 10 + (num_bars * 0.5)
-    fig_width = max(12, min(22, calculated_width))
-    fig_height = 10
+    if orientation == "auto":
+        orientation = "horizontal" if num_bars <= AUTO_HORIZONTAL_MAX else "vertical"
+    horizontal = orientation == "horizontal"
 
-    # Tamaño de la etiqueta (ticker + valor) según cantidad de barras
-    if num_bars > 50:
-        label_fs = 12
-    elif num_bars > 40:
-        label_fs = 12.5
-    elif num_bars > 25:
-        label_fs = 13
+    # ---------- Geometría y tamaños de fuente ----------
+    if horizontal:
+        fig_width = 12
+        fig_height = min(20, max(7, 2.3 + 0.30 * num_bars))
+        top_in, bottom_in, left_in, right_in = 1.35, 0.95, 0.35, 0.30
+        axes_h_pt = (fig_height - top_in - bottom_in) * 72
+        pitch_pt = axes_h_pt / num_bars                      # alto disponible por fila
+        ticker_fs = min(18, max(11, 0.62 * pitch_pt))
+        label_fs = ticker_fs - TICKER_FONT_BOOST
     else:
-        label_fs = 14
+        calculated_width = 10 + (num_bars * 0.5)
+        fig_width = max(12, min(22, calculated_width))
+        fig_height = 10
+        if num_bars > 50:
+            label_fs = 12
+        elif num_bars > 40:
+            label_fs = 12.5
+        elif num_bars > 25:
+            label_fs = 13
+        else:
+            label_fs = 14
+        ticker_fs = label_fs + TICKER_FONT_BOOST
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=PAPER_COLOR)
     ax.set_facecolor(BG_COLOR)
-    xs = list(range(num_bars))
+    positions = list(range(num_bars))
+    values = list(df['Return'])
 
-    # Franjas alternas muy tenues: separan una columna de la siguiente sin líneas
-    for x in range(0, num_bars, 2):
-        ax.axvspan(x - 0.5, x + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
-    bars = ax.bar(xs, df['Return'], color=palette_colors, width=0.8, zorder=3)
+    # Franjas alternas muy tenues: separan una barra de la siguiente sin líneas
+    band = ax.axhspan if horizontal else ax.axvspan
+    for i in range(0, num_bars, 2):
+        band(i - 0.5, i + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
 
-    # Etiquetas pegadas al extremo de cada barra (arriba si >=0, abajo si <0).
-    # El ticker va más grande que el valor; se leen de abajo hacia arriba: "TICKER  valor%".
-    ticker_fs = label_fs + TICKER_FONT_BOOST
+    if horizontal:
+        ax.barh(positions, values, color=palette_colors, height=0.78, zorder=3)
+    else:
+        ax.bar(positions, values, color=palette_colors, width=0.8, zorder=3)
+
+    # ---------- Etiquetas pegadas al extremo de cada barra ----------
+    # Vertical: arriba si >=0, abajo si <0, rotadas. Horizontal: a la derecha si >=0, a la izquierda si <0.
+    # El ticker va más grande que el valor; se lee "TICKER  valor%".
     pairs = []  # (ticker_ann, value_ann, positive)
-    for x, name, value in zip(xs, df['Display Name'], df['Return']):
+    for i, name, value in zip(positions, df['Display Name'], values):
         positive = value >= 0
         sign = 1 if positive else -1
-        common = dict(
-            xy=(x, value), textcoords='offset points', ha='center',
-            va='bottom' if positive else 'top', rotation=90,
-            color=TEXT_COLOR, fontweight='bold', zorder=5, annotation_clip=False,
-        )
-        t_ann = ax.annotate(name, xytext=(0, 4 * sign), fontsize=ticker_fs, **common)
-        v_ann = ax.annotate(f'{value:.1f}%', xytext=(0, 4 * sign), fontsize=label_fs, **common)
+        if horizontal:
+            common = dict(xy=(value, i), ha='left' if positive else 'right', va='center', rotation=0)
+            start = (4 * sign, 0)
+        else:
+            common = dict(xy=(i, value), ha='center', va='bottom' if positive else 'top', rotation=90)
+            start = (0, 4 * sign)
+        common.update(textcoords='offset points', color=TEXT_COLOR, fontweight='bold',
+                      zorder=5, annotation_clip=False)
+        t_ann = ax.annotate(name, xytext=start, fontsize=ticker_fs, **common)
+        v_ann = ax.annotate(f'{value:.1f}%', xytext=start, fontsize=label_fs, **common)
         pairs.append((t_ann, v_ann, positive))
 
-    ax.axhline(0, color=ZERO_LINE_COLOR, linewidth=1.5, alpha=0.8, linestyle='--', zorder=4)
+    # ---------- Línea del cero, grilla y ejes ----------
+    zero_line = ax.axvline if horizontal else ax.axhline
+    zero_line(0, color=ZERO_LINE_COLOR, linewidth=1.5, alpha=0.8, linestyle='--', zorder=4)
     ax.set_axisbelow(True)
-    ax.grid(True, axis='y', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
+    ax.grid(True, axis='x' if horizontal else 'y', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
 
-    ax.set_xlim(-0.7, num_bars - 0.3)
-    ax.set_xticks([])  # el ticker ya está en la etiqueta de cada barra
+    pct = plt.FuncFormatter(lambda x, _: f'{x:.0f}%')
+    if horizontal:
+        ax.set_ylim(num_bars - 0.3, -0.7)   # invertido: la mayor performance arriba
+        ax.set_yticks([])                   # el ticker ya está en la etiqueta de cada barra
+        ax.set_xlabel("Retorno (%)", fontsize=14, color=TEXT_COLOR, labelpad=10)
+        ax.xaxis.set_major_formatter(pct)
+        ax.tick_params(axis='x', colors=TICK_COLOR, labelsize=14)
+        value_spine, hidden_spines = 'bottom', ['top', 'right', 'left']
+    else:
+        ax.set_xlim(-0.7, num_bars - 0.3)
+        ax.set_xticks([])                   # el ticker ya está en la etiqueta de cada barra
+        ax.set_ylabel("Retorno (%)", fontsize=14, color=TEXT_COLOR, labelpad=12)
+        ax.yaxis.set_major_formatter(pct)
+        ax.tick_params(axis='y', colors=TICK_COLOR, labelsize=14)
+        value_spine, hidden_spines = 'left', ['top', 'right', 'bottom']
+
+    # Solo queda el spine del eje de valores (el otro no marca nada: el cero lo marca la línea roja)
+    ax.spines[hidden_spines].set_visible(False)
+    ax.spines[value_spine].set_color(TEXT_COLOR)
+    ax.spines[value_spine].set_linewidth(0.8)
 
     # Título y subtítulo anclados al eje (centrados sobre las barras, separación fija en puntos)
     ax.annotate(title, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 46), textcoords='offset points',
@@ -179,55 +230,58 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     ax.annotate(period_label, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 18), textcoords='offset points',
                 ha='center', va='bottom', fontsize=15, color=TICK_COLOR, annotation_clip=False)
 
-    ax.set_ylabel("Retorno (%)", fontsize=14, color=TEXT_COLOR, labelpad=12)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0f}%'))
-    ax.tick_params(axis='y', colors=TICK_COLOR, labelsize=14)
-
-    # Sin spine inferior: no marca nada (el cero lo marca la línea roja)
-    ax.spines[['top', 'right', 'bottom']].set_visible(False)
-    ax.spines['left'].set_color(TEXT_COLOR)
-    ax.spines['left'].set_linewidth(0.8)
-
-    ax.text(0.5, 0.5, '@MTaurus_ok', transform=ax.transAxes, fontsize=90, color=WATERMARK_COLOR,
-            ha='center', va='center', rotation=30, zorder=999)
+    ax.text(0.5, 0.5, '@MTaurus_ok', transform=ax.transAxes, fontsize=70 if horizontal else 90,
+            color=WATERMARK_COLOR, ha='center', va='center', rotation=30, zorder=999)
 
     # Márgenes fijos (no tight_layout): así el tamaño del eje no depende de las etiquetas
-    # y el ajuste del eje Y de más abajo converge siempre igual.
-    fig.subplots_adjust(left=0.06, right=0.995, top=0.89, bottom=0.03)
+    # y el ajuste del eje de valores de más abajo converge siempre igual.
+    if horizontal:
+        fig.subplots_adjust(left=left_in / fig_width, right=1 - right_in / fig_width,
+                            top=1 - top_in / fig_height, bottom=bottom_in / fig_height)
+    else:
+        fig.subplots_adjust(left=0.06, right=0.995, top=0.89, bottom=0.03)
 
-    # Ajustar el eje Y midiendo el espacio real que ocupan las etiquetas
-    # (están en puntos, no en unidades de datos, así que se itera hasta converger)
-    # 1) Apilar ticker y valor según el largo real de cada texto (en puntos)
+    # ---------- Ajuste del eje de valores a las etiquetas ----------
+    # Las etiquetas están en puntos, no en unidades de datos: se mide el espacio real que ocupan.
+    # 1) Apilar ticker y valor según el largo real de cada texto (en puntos, a lo largo de la barra)
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     px_to_pt = 72.0 / fig.dpi
-    for t_ann, v_ann, positive in pairs:
-        t_len = t_ann.get_window_extent(renderer).height * px_to_pt
-        v_len = v_ann.get_window_extent(renderer).height * px_to_pt
-        if positive:   # ticker junto a la barra, valor encima
-            v_ann.xyann = (0, 4 + t_len + LABEL_GAP_PT)
-        else:          # valor junto a la barra, ticker más abajo
-            t_ann.xyann = (0, -(4 + v_len + LABEL_GAP_PT))
 
-    # 2) Ajustar el eje Y a ese espacio
-    y_pad = (vmax - vmin) * 0.03
-    ax.set_ylim(vmin - y_pad, vmax + y_pad)
+    def _along(ann):
+        bb = ann.get_window_extent(renderer)
+        return (bb.width if horizontal else bb.height) * px_to_pt
+
+    def _offset(amount):
+        return (amount, 0) if horizontal else (0, amount)
+
+    for t_ann, v_ann, positive in pairs:
+        if positive:   # ticker junto a la barra, valor más afuera
+            v_ann.xyann = _offset(4 + _along(t_ann) + LABEL_GAP_PT)
+        else:          # valor junto a la barra, ticker más afuera
+            t_ann.xyann = _offset(-(4 + _along(v_ann) + LABEL_GAP_PT))
+
+    # 2) Ampliar los límites del eje de valores hasta que entren todas las etiquetas
+    set_value_lim = ax.set_xlim if horizontal else ax.set_ylim
+    pad = (vmax - vmin) * 0.03
+    set_value_lim(vmin - pad, vmax + pad)
     for _ in range(4):
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
         inv = ax.transData.inverted()
-        top, bottom = vmax, vmin
+        hi, lo = vmax, vmin
         for t_ann, v_ann, positive in pairs:
             for ann in (t_ann, v_ann):
                 bb = ann.get_window_extent(renderer)
-                y_lo = inv.transform((bb.x0, bb.y0))[1]
-                y_hi = inv.transform((bb.x0, bb.y1))[1]
+                p0 = inv.transform((bb.x0, bb.y0))
+                p1 = inv.transform((bb.x1, bb.y1))
+                c0, c1 = (p0[0], p1[0]) if horizontal else (p0[1], p1[1])
                 if positive:
-                    top = max(top, y_hi)
+                    hi = max(hi, c0, c1)
                 else:
-                    bottom = min(bottom, y_lo)
-        span = top - bottom
-        ax.set_ylim(bottom - span * 0.02, top + span * 0.02)
+                    lo = min(lo, c0, c1)
+        span = hi - lo
+        set_value_lim(lo - span * 0.02, hi + span * 0.02)
 
     output_path = os.path.abspath(filename)
     plt.savefig(output_path, dpi=180, bbox_inches='tight', facecolor=PAPER_COLOR)
@@ -242,7 +296,8 @@ def run_performance(
     group_name="Activos",
     tickers_file=None,
     ccl_adjust=False,
-    custom_start_date=None  # ← NEW
+    custom_start_date=None,  # ← NEW
+    orientation="auto"       # 'auto' | 'horizontal' | 'vertical'
 ):
     name_mapping = load_ticker_names(tickers_file) if tickers_file else {}
 
@@ -326,7 +381,8 @@ def run_performance(
         performance,
         f"Performance: {group_name}",
         period_label,
-        name_mapping
+        name_mapping,
+        orientation=orientation
     )
     return path
 
@@ -338,6 +394,7 @@ def main():
     parser.add_argument('--group_name', type=str, default="Activos")
     parser.add_argument('--tickers_file', type=str, default=None)
     parser.add_argument('--ccl_adjust', action='store_true')
+    parser.add_argument('--orientation', choices=['auto', 'horizontal', 'vertical'], default='auto')
     args = parser.parse_args()
     # main() is kept for backward CLI compatibility (no custom date here)
     path = run_performance(
@@ -345,7 +402,8 @@ def main():
         period=args.period,
         group_name=args.group_name,
         tickers_file=args.tickers_file,
-        ccl_adjust=args.ccl_adjust
+        ccl_adjust=args.ccl_adjust,
+        orientation=args.orientation
     )
     if path:
         print(path)
