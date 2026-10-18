@@ -13,14 +13,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ==== CONFIG - Dark theme refined ====
-BG_COLOR = '#0f0f1a'  # Very dark background
-PAPER_COLOR = '#05050f'  # Slightly different for figure
-TEXT_COLOR = '#e0e0ff'  # Soft light purple-white
-GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.22)  # Matplotlib-friendly RGBA tuple
+from mtaurus_style import BG_COLOR, PAPER_COLOR, TEXT_COLOR, GRID_COLOR, WATERMARK_COLOR  # noqa: E402  (paleta compartida)
 LINE_COLOR = '#ff7070'  # Softer vivid red
 FILL_COLOR = '#ff4040'  # Fill under drawdown
 ACCENT_COLOR = '#40c0ff'  # Optional accent (not used here, but consistent)
-WATERMARK_COLOR = (140 / 255, 140 / 255, 180 / 255, 0.09)  # Matplotlib-safe RGBA
 
 plt.style.use('dark_background')
 
