@@ -15,8 +15,14 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ===================== CONFIG =====================
-BG_COLOR = '#1a1a1a'
-TEXT_COLOR = 'white'
+# Tema Taurus (misma paleta que heatmap_script / drawdown_plot / returns_evolution_plot)
+BG_COLOR = '#0f0f1a'      # fondo de ejes
+PAPER_COLOR = '#05050f'   # fondo de figura y savefig
+TEXT_COLOR = '#e0e0ff'
+TICK_COLOR = '#c0c0ff'
+GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)
+WATERMARK_COLOR = (140 / 255, 140 / 255, 180 / 255, 0.09)
+ZERO_LINE_COLOR = '#ff4d4d'
 TICKER_FONT_BOOST = 3   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
 LABEL_GAP_PT = 5        # separación entre ticker y valor
 plt.style.use('dark_background')
@@ -114,8 +120,9 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
         " ".join(str(name_mapping.get(t, t)).split()) for t in df.index
     ]
 
-    colors = ["#ff3333", "#ffffff", "#00e673"]
-    cmap = LinearSegmentedColormap.from_list("RedWhiteGreen", colors)
+    # Mismo divergente apagado del heatmap: rojo - gris azulado - verde
+    colors = [(0.7, 0.15, 0.15), (0.3, 0.3, 0.35), (0.15, 0.6, 0.25)]
+    cmap = LinearSegmentedColormap.from_list("custom_div_dark", colors, N=256)
     vmin = df['Return'].min()
     vmax = df['Return'].max()
     if vmin >= 0: vmin = -0.01
@@ -138,9 +145,13 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     else:
         label_fs = 13
 
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=BG_COLOR)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=PAPER_COLOR)
     ax.set_facecolor(BG_COLOR)
     xs = list(range(num_bars))
+
+    # Franjas alternas muy tenues: separan una columna de la siguiente sin líneas
+    for x in range(0, num_bars, 2):
+        ax.axvspan(x - 0.5, x + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
     bars = ax.bar(xs, df['Return'], color=palette_colors, width=0.8, zorder=3)
 
     # Etiquetas pegadas al extremo de cada barra (arriba si >=0, abajo si <0).
@@ -159,25 +170,27 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
         v_ann = ax.annotate(f'{value:.1f}%', xytext=(0, 4 * sign), fontsize=label_fs, **common)
         pairs.append((t_ann, v_ann, positive))
 
-    ax.axhline(0, color='white', linewidth=2, alpha=0.8, linestyle='-', zorder=4)
-    for x in range(num_bars - 1):
-        ax.axvline(x + 0.5, color='gray', linestyle=':', linewidth=0.8, alpha=0.2)
+    ax.axhline(0, color=ZERO_LINE_COLOR, linewidth=1.5, alpha=0.8, linestyle='--', zorder=4)
+    ax.set_axisbelow(True)
+    ax.grid(True, axis='y', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
 
     ax.set_xlim(-0.7, num_bars - 0.3)
     ax.set_xticks([])  # el ticker ya está en la etiqueta de cada barra
 
-    ax.set_title(f"{title}\n{period_label}", fontsize=24, color=TEXT_COLOR, pad=25, fontweight='bold')
-    ax.set_ylabel("Retorno (%)", fontsize=16, color=TEXT_COLOR, labelpad=15)
+    fig.suptitle(f"{title}\n{period_label}", fontsize=22, color=TEXT_COLOR, fontweight='bold', y=0.99)
+    ax.set_ylabel("Retorno (%)", fontsize=13, color=TEXT_COLOR, labelpad=12)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0f}%'))
-    ax.tick_params(axis='y', colors=TEXT_COLOR, labelsize=12)
+    ax.tick_params(axis='y', colors=TICK_COLOR, labelsize=12)
 
     ax.spines[['top', 'right']].set_visible(False)
-    ax.spines[['left', 'bottom']].set_color('white')
+    for side in ('left', 'bottom'):
+        ax.spines[side].set_color(TEXT_COLOR)
+        ax.spines[side].set_linewidth(0.8)
 
-    ax.text(0.5, 0.5, '@mtaurus_ok', transform=ax.transAxes,
-            fontsize=50, color='gray', alpha=0.15, ha='center', va='center', rotation=30)
+    fig.text(0.5, 0.5, '@MTaurus_ok', fontsize=90, color=WATERMARK_COLOR,
+             ha='center', va='center', rotation=30, zorder=999)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.965])
 
     # Ajustar el eje Y midiendo el espacio real que ocupan las etiquetas
     # (están en puntos, no en unidades de datos, así que se itera hasta converger)
@@ -214,7 +227,7 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
         ax.set_ylim(bottom - span * 0.02, top + span * 0.02)
 
     output_path = os.path.abspath(filename)
-    plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
+    plt.savefig(output_path, dpi=180, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close()
     return output_path
 
