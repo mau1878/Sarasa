@@ -10,7 +10,6 @@ import os
 import json
 from datetime import datetime, timedelta
 import warnings
-import textwrap
 
 # Ignorar warnings de yfinance
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -108,12 +107,10 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     if performance.empty:
         return None
     df = performance.to_frame(name='Return')
-    labels = []
-    for ticker in df.index:
-        real_name = name_mapping.get(ticker, ticker)
-        wrapped_name = "\n".join(textwrap.wrap(real_name, width=12))
-        labels.append(wrapped_name)
-    df['Display Name'] = labels
+    # Etiqueta en una sola línea: "TICKER  valor%" (sin saltos de línea)
+    df['Display Name'] = [
+        " ".join(str(name_mapping.get(t, t)).split()) for t in df.index
+    ]
 
     colors = ["#ff3333", "#ffffff", "#00e673"]
     cmap = LinearSegmentedColormap.from_list("RedWhiteGreen", colors)
@@ -129,52 +126,52 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     fig_width = max(12, min(22, calculated_width))
     fig_height = 10
 
-    if num_bars > 40:
-        base_max_size = 10
+    # Tamaño de la etiqueta (ticker + valor) según cantidad de barras
+    if num_bars > 50:
+        label_fs = 10
+    elif num_bars > 40:
+        label_fs = 11
     elif num_bars > 25:
-        base_max_size = 11
-    elif num_bars > 15:
-        base_max_size = 12
+        label_fs = 12
     else:
-        base_max_size = 14
+        label_fs = 13
 
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=BG_COLOR)
     ax.set_facecolor(BG_COLOR)
-    bars = ax.bar(df['Display Name'], df['Return'], color=palette_colors, width=0.8, zorder=3)
+    xs = list(range(num_bars))
+    bars = ax.bar(xs, df['Return'], color=palette_colors, width=0.8, zorder=3)
 
-    y_range = vmax - vmin
-    y_buffer = y_range * 0.15
-    ax.set_ylim(vmin - y_buffer, vmax + y_buffer)
-
-    for bar in bars:
-        height = bar.get_height()
-        offset = y_range * 0.02 if height >= 0 else -y_range * 0.02
-        va = 'bottom' if height >= 0 else 'top'
-        ax.text(bar.get_x() + bar.get_width() / 2., height + offset,
-                f'{height:.1f}%',
-                ha='center', va=va, color=TEXT_COLOR, fontsize=11, rotation=90, fontweight='bold')
+    # Etiquetas ticker + valor, pegadas al extremo de cada barra (arriba si >=0, abajo si <0)
+    annotations = []
+    for x, name, value in zip(xs, df['Display Name'], df['Return']):
+        positive = value >= 0
+        ann = ax.annotate(
+            f'{name}  {value:.1f}%',
+            xy=(x, value),
+            xytext=(0, 4 if positive else -4),
+            textcoords='offset points',
+            ha='center',
+            va='bottom' if positive else 'top',
+            rotation=90,
+            color=TEXT_COLOR,
+            fontsize=label_fs,
+            fontweight='bold',
+            zorder=5,
+            annotation_clip=False,
+        )
+        annotations.append((ann, positive))
 
     ax.axhline(0, color='white', linewidth=2, alpha=0.8, linestyle='-', zorder=4)
-    for x in range(len(df) - 1):
+    for x in range(num_bars - 1):
         ax.axvline(x + 0.5, color='gray', linestyle=':', linewidth=0.8, alpha=0.2)
+
+    ax.set_xlim(-0.7, num_bars - 0.3)
+    ax.set_xticks([])  # el ticker ya está en la etiqueta de cada barra
 
     ax.set_title(f"{title}\n{period_label}", fontsize=24, color=TEXT_COLOR, pad=25, fontweight='bold')
     ax.set_ylabel("Retorno (%)", fontsize=16, color=TEXT_COLOR, labelpad=15)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0f}%'))
-    ax.tick_params(axis='x', colors=TEXT_COLOR, rotation=45)
     ax.tick_params(axis='y', colors=TEXT_COLOR, labelsize=12)
-    plt.setp(ax.get_xticklabels(), ha="right", rotation_mode="anchor")
-
-    xtick_labels = ax.get_xticklabels()
-    for label in xtick_labels:
-        text = label.get_text()
-        num_lines = text.count('\n') + 1
-        if num_lines == 1:
-            label.set_fontsize(base_max_size)
-        elif num_lines == 2:
-            label.set_fontsize(max(8, base_max_size - 2))
-        else:
-            label.set_fontsize(max(7, base_max_size - 4))
 
     ax.spines[['top', 'right']].set_visible(False)
     ax.spines[['left', 'bottom']].set_color('white')
@@ -183,6 +180,27 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
             fontsize=50, color='gray', alpha=0.15, ha='center', va='center', rotation=30)
 
     plt.tight_layout()
+
+    # Ajustar el eje Y midiendo el espacio real que ocupan las etiquetas
+    # (están en puntos, no en unidades de datos, así que se itera hasta converger)
+    y_pad = (vmax - vmin) * 0.03
+    ax.set_ylim(vmin - y_pad, vmax + y_pad)
+    for _ in range(4):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        inv = ax.transData.inverted()
+        top, bottom = vmax, vmin
+        for ann, positive in annotations:
+            bb = ann.get_window_extent(renderer)
+            y_lo = inv.transform((bb.x0, bb.y0))[1]
+            y_hi = inv.transform((bb.x0, bb.y1))[1]
+            if positive:
+                top = max(top, y_hi)
+            else:
+                bottom = min(bottom, y_lo)
+        span = top - bottom
+        ax.set_ylim(bottom - span * 0.02, top + span * 0.02)
+
     output_path = os.path.abspath(filename)
     plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=BG_COLOR)
     plt.close()
