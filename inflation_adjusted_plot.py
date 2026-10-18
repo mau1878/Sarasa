@@ -27,11 +27,7 @@ plot_style = {
 }
 
 # ================= Matplotlib (dark theme, consistente con heatmap_script.py) =================
-BG_COLOR = '#0f0f1a'
-PAPER_COLOR = '#05050f'
-TEXT_COLOR = '#e0e0ff'
-GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.22)
-WATERMARK_COLOR = (140 / 255, 140 / 255, 180 / 255, 0.09)
+from mtaurus_style import BG_COLOR, PAPER_COLOR, TEXT_COLOR, GRID_COLOR, WATERMARK_COLOR  # noqa: E402  (paleta compartida)
 plt.style.use('dark_background')
 
 
