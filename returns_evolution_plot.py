@@ -12,10 +12,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ===================== CONFIG =====================
-BG_COLOR = '#0f0f1a'
-PAPER_COLOR = '#05050f'
-TEXT_COLOR = '#e0e0ff'
-GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)
+from mtaurus_style import BG_COLOR, PAPER_COLOR, TEXT_COLOR  # noqa: E402  (paleta compartida)
+GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)  # propio de este gráfico (el compartido usa alpha 0.22)
 
 LINE_COLORS = [
     '#ff7070', '#40c0ff', '#00e673', '#ffd700', '#ba55d3',
