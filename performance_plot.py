@@ -16,13 +16,9 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ===================== CONFIG =====================
 # Tema Taurus (misma paleta que heatmap_script / drawdown_plot / returns_evolution_plot)
-BG_COLOR = '#0f0f1a'      # fondo de ejes
-PAPER_COLOR = '#05050f'   # fondo de figura y savefig
-TEXT_COLOR = '#e0e0ff'
-TICK_COLOR = '#c0c0ff'
-GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)
-WATERMARK_COLOR = (140 / 255, 140 / 255, 180 / 255, 0.09)
-ZERO_LINE_COLOR = '#ff4d4d'
+from mtaurus_style import (  # noqa: E402  (paleta compartida)
+    BG_COLOR, PAPER_COLOR, TEXT_COLOR, TICK_COLOR, GRID_COLOR, WATERMARK_COLOR, ZERO_LINE_COLOR, DIV_COLORS,
+)
 TICKER_FONT_BOOST = 3   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
 LABEL_GAP_PT = 5        # separación entre ticker y valor
 plt.style.use('dark_background')
@@ -121,8 +117,7 @@ def create_bar_plot(performance, title, period_label, name_mapping, filename="pe
     ]
 
     # Mismo divergente apagado del heatmap: rojo - gris azulado - verde
-    colors = [(0.7, 0.15, 0.15), (0.3, 0.3, 0.35), (0.15, 0.6, 0.25)]
-    cmap = LinearSegmentedColormap.from_list("custom_div_dark", colors, N=256)
+    cmap = LinearSegmentedColormap.from_list("custom_div_dark", DIV_COLORS, N=256)
     vmin = df['Return'].min()
     vmax = df['Return'].max()
     if vmin >= 0: vmin = -0.01
