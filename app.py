@@ -630,6 +630,14 @@ elif tool == "Performance":
     )
     orientation = {"Automática": "auto", "Horizontal": "horizontal", "Vertical": "vertical"}[orientation_label]
 
+    subtitle = st.text_area(
+        "Subtítulo / aclaración (opcional)",
+        "",
+        height=80,
+        placeholder="Ej.: Datos desde el cierre del lunes posterior a la primera vuelta",
+        help="Se muestra bajo la línea del período. Se ajusta solo al ancho del gráfico.",
+    )
+
     if st.button("Generar gráfico"):
         tickers = []
         group_name = "Activos"
@@ -657,7 +665,8 @@ elif tool == "Performance":
                 tickers_file=TICKERGROUPSFILE,
                 ccl_adjust=adjust_ccl,
                 custom_start_date=custom_start_date,  # ← NEW
-                orientation=orientation
+                orientation=orientation,
+                subtitle=subtitle.strip() or None
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
