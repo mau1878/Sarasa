@@ -10,6 +10,7 @@ import os
 import json
 from datetime import datetime, timedelta
 import warnings
+import textwrap
 
 # Ignorar warnings de yfinance
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -21,6 +22,7 @@ from mtaurus_style import (  # noqa: E402  (paleta compartida)
 )
 TICKER_FONT_BOOST = 2   # puntos extra del ticker respecto del valor (subir/bajar a gusto)
 LABEL_GAP_PT = 5        # separación entre ticker y valor
+NOTE_FONT_SIZE = 13     # tamaño del subtítulo/aclaración opcional
 AUTO_HORIZONTAL_MAX = 35  # orientation='auto': horizontal hasta esta cantidad de barras, vertical por encima
 plt.style.use('dark_background')
 
@@ -109,13 +111,16 @@ def calculate_performance(data, reference_prices=None):
     return returns.sort_values(ascending=False)
 
 def create_bar_plot(performance, title, period_label, name_mapping,
-                    filename="performance_chart.png", orientation="auto"):
+                    filename="performance_chart.png", orientation="auto", subtitle=None):
     """Gráfico de barras de performance.
 
     orientation:
       'vertical'   barras verticales, etiquetas rotadas 90° (apaisado, mejor con muchas barras)
       'horizontal' barras horizontales, texto horizontal (más alto que ancho, mejor con pocas/medianas)
       'auto'       horizontal hasta AUTO_HORIZONTAL_MAX barras, vertical por encima
+
+    subtitle: aclaración opcional (texto libre) que se muestra bajo la línea del periodo.
+      Se ajusta sola al ancho del gráfico; con "\n" se fuerzan saltos de línea.
     """
     if performance.empty:
         return None
@@ -139,11 +144,21 @@ def create_bar_plot(performance, title, period_label, name_mapping,
         orientation = "horizontal" if num_bars <= AUTO_HORIZONTAL_MAX else "vertical"
     horizontal = orientation == "horizontal"
 
+    # ---------- Subtítulo opcional: se parte en líneas según el ancho estimado de la figura ----------
+    est_width = 12 if horizontal else max(12, min(22, 10 + num_bars * 0.5))
+    max_chars = max(30, int(est_width * 72 * 0.9 / (NOTE_FONT_SIZE * 0.55)))
+    note_lines = []
+    if subtitle and str(subtitle).strip():
+        for para in str(subtitle).strip().splitlines():
+            note_lines += textwrap.wrap(para.strip(), width=max_chars) or [""]
+    note_h_pt = len(note_lines) * NOTE_FONT_SIZE * 1.6 if note_lines else 0   # ~alto real de una línea de matplotlib
+    note_extra_in = (note_h_pt + 6) / 72 if note_lines else 0   # alto extra que pide arriba del gráfico
+
     # ---------- Geometría y tamaños de fuente ----------
     if horizontal:
         fig_width = 12
         fig_height = min(20, max(7, 2.3 + 0.30 * num_bars))
-        top_in, bottom_in, left_in, right_in = 1.35, 0.95, 0.35, 0.30
+        top_in, bottom_in, left_in, right_in = 1.35 + note_extra_in, 0.95, 0.35, 0.30
         axes_h_pt = (fig_height - top_in - bottom_in) * 72
         pitch_pt = axes_h_pt / num_bars                      # alto disponible por fila
         ticker_fs = min(18, max(11, 0.62 * pitch_pt))
@@ -224,11 +239,19 @@ def create_bar_plot(performance, title, period_label, name_mapping,
     ax.spines[value_spine].set_linewidth(0.8)
 
     # Título y subtítulo anclados al eje (centrados sobre las barras, separación fija en puntos)
-    ax.annotate(title, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 46), textcoords='offset points',
+    # De arriba hacia abajo: título > periodo > aclaración (más chica, cursiva y más tenue)
+    period_off = 18 + (note_h_pt + 4 if note_lines else 0)
+    title_off = period_off + 28
+    ax.annotate(title, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, title_off), textcoords='offset points',
                 ha='center', va='bottom', fontsize=22, fontweight='bold', color=TEXT_COLOR,
                 annotation_clip=False)
-    ax.annotate(period_label, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 18), textcoords='offset points',
+    ax.annotate(period_label, xy=(0.5, 1), xycoords='axes fraction', xytext=(0, period_off), textcoords='offset points',
                 ha='center', va='bottom', fontsize=15, color=TICK_COLOR, annotation_clip=False)
+    if note_lines:
+        ax.annotate("\n".join(note_lines), xy=(0.5, 1), xycoords='axes fraction', xytext=(0, 12),
+                    textcoords='offset points', ha='center', va='bottom', fontsize=NOTE_FONT_SIZE,
+                    fontstyle='italic', linespacing=1.0, color=TICK_COLOR, alpha=0.85,
+                    annotation_clip=False)
 
     ax.text(0.5, 0.5, '@MTaurus_ok', transform=ax.transAxes, fontsize=70 if horizontal else 90,
             color=WATERMARK_COLOR, ha='center', va='center', rotation=30, zorder=999)
@@ -239,7 +262,7 @@ def create_bar_plot(performance, title, period_label, name_mapping,
         fig.subplots_adjust(left=left_in / fig_width, right=1 - right_in / fig_width,
                             top=1 - top_in / fig_height, bottom=bottom_in / fig_height)
     else:
-        fig.subplots_adjust(left=0.06, right=0.995, top=0.89, bottom=0.03)
+        fig.subplots_adjust(left=0.06, right=0.995, top=1 - (1.1 + note_extra_in) / fig_height, bottom=0.03)
 
     # ---------- Ajuste del eje de valores a las etiquetas ----------
     # Las etiquetas están en puntos, no en unidades de datos: se mide el espacio real que ocupan.
@@ -297,7 +320,8 @@ def run_performance(
     tickers_file=None,
     ccl_adjust=False,
     custom_start_date=None,  # ← NEW
-    orientation="auto"       # 'auto' | 'horizontal' | 'vertical'
+    orientation="auto",      # 'auto' | 'horizontal' | 'vertical'
+    subtitle=None            # aclaración opcional bajo el periodo (texto libre)
 ):
     name_mapping = load_ticker_names(tickers_file) if tickers_file else {}
 
@@ -382,7 +406,8 @@ def run_performance(
         f"Performance: {group_name}",
         period_label,
         name_mapping,
-        orientation=orientation
+        orientation=orientation,
+        subtitle=subtitle
     )
     return path
 
@@ -395,6 +420,7 @@ def main():
     parser.add_argument('--tickers_file', type=str, default=None)
     parser.add_argument('--ccl_adjust', action='store_true')
     parser.add_argument('--orientation', choices=['auto', 'horizontal', 'vertical'], default='auto')
+    parser.add_argument('--subtitle', type=str, default=None, help='Aclaración opcional bajo el periodo')
     args = parser.parse_args()
     # main() is kept for backward CLI compatibility (no custom date here)
     path = run_performance(
@@ -403,7 +429,8 @@ def main():
         group_name=args.group_name,
         tickers_file=args.tickers_file,
         ccl_adjust=args.ccl_adjust,
-        orientation=args.orientation
+        orientation=args.orientation,
+        subtitle=args.subtitle
     )
     if path:
         print(path)
