@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import hsv_to_rgb, to_rgb, to_hex
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from scipy.interpolate import make_interp_spline
 from adjustText import adjust_text
 from functools import lru_cache
@@ -175,15 +175,42 @@ def fetch_intraday_data(tickers, target_date=None):
     return data
 
 
+def _window_bounds(start_time, end_time):
+    """(desde, hasta) como datetime.time, o None si no hay ventana."""
+    if start_time is None and end_time is None:
+        return None
+    return (start_time or dtime(0, 0), end_time or dtime(23, 59, 59))
+
+
+def _parse_ref_times(ref_times):
+    """['09:30|Apertura', '14:00'] -> [(time(9,30), 'Apertura'), (time(14,0), '')]"""
+    parsed = []
+    for chunk in ref_times or []:
+        chunk = str(chunk).strip()
+        if not chunk:
+            continue
+        hhmm, _, label = chunk.partition("|")
+        try:
+            t = datetime.strptime(hhmm.strip(), "%H:%M").time()
+        except ValueError:
+            print(f"DEBUG: línea de referencia inválida ignorada: {chunk!r}")
+            continue
+        parsed.append((t, label.strip()))
+    return parsed
+
+
 def run_intraday_evolution(tickers, group_name="Activos", custom_title=None,
-                           max_lines=15, smooth=True, baseline="open", target_date=None):
+                           max_lines=15, smooth=True, baseline="open", target_date=None,
+                           start_time=None, end_time=None, ref_times=None):
     df = fetch_intraday_data(tickers, target_date)
     if df.empty:
         return None
-    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline)
+    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline,
+                                   start_time=start_time, end_time=end_time, ref_times=ref_times)
 
 
-def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open"):
+def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open",
+                            start_time=None, end_time=None, ref_times=None):
     if df.empty or len(df) < 5:
         print("DEBUG: df intraday vacío o muy pequeño")
         return None
@@ -199,8 +226,14 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     print(f"DEBUG: Datos intraday para {len(df)} minutos, tickers: {list(df.columns)}")
     print(f"DEBUG: Rango de tiempo: {df.index[0]} → {df.index[-1]}")
 
+    # Ventana horaria (hora de Nueva York, igual que el eje X)
+    window = _window_bounds(start_time, end_time)
+    if window:
+        print(f"DEBUG: ventana horaria {window[0]} → {window[1]}")
+
     returns = pd.DataFrame(index=df.index)
     late_starters = []
+    title_base = "desde Apertura"
 
     for col in df.columns:
         series = df[col].dropna()
@@ -220,17 +253,29 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                 late_starters.append(col)
             title_base = "desde Apertura"
             print(f"DEBUG: {col} (Apertura) base = {ticker_base:.4f} at {series.index[0]}")
+        elif baseline == "window":
+            # Primer dato del ticker dentro de la ventana horaria
+            s_win = series.between_time(window[0], window[1]) if window else series
+            if s_win.empty:
+                print(f"DEBUG: Ticker {col} skipped (sin datos en la ventana)")
+                continue
+            ticker_base = float(s_win.iloc[0])
+            if window:
+                title_base = f"desde Apertura de la ventana ({window[0]:%H:%M}–{window[1]:%H:%M})"
+            else:
+                title_base = "desde el primer dato del día"
+            print(f"DEBUG: {col} (Ventana) base = {ticker_base:.4f} at {s_win.index[0]}")
         else:
             # Cierre anterior
-            target_date = series.index[0].date()
-            daily_end = pd.to_datetime(target_date)
+            day_only = series.index[0].date()
+            daily_end = pd.to_datetime(day_only)
             daily_start = daily_end - timedelta(days=10)
             print(f"DEBUG: {col} buscando previous close. daily_start={daily_start.date()}, daily_end={daily_end.date()}")
             daily = yf.download(col, start=daily_start, end=daily_end,
                                 progress=False, auto_adjust=True)['Close']
             print(f"DEBUG: {col} daily data shape: {daily.shape}, dates: {list(daily.index.date) if not daily.empty else 'empty'}")
             if not daily.empty:
-                prev_closes = daily[daily.index.date < target_date]
+                prev_closes = daily[daily.index.date < day_only]
                 if not prev_closes.empty:
                     ticker_base = float(prev_closes.iloc[-1].item() if hasattr(prev_closes.iloc[-1], 'item') else prev_closes.iloc[-1])
                     print(f"DEBUG: {col} previous close encontrado = {ticker_base:.4f} ({prev_closes.index[-1].date()})")
@@ -246,12 +291,18 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     returns = returns.dropna(axis=1, how='all')
 
-    if returns.empty or returns.shape[1] == 0:
+    # Recorte horario de lo que se muestra (el baseline ya se calculó arriba)
+    if window and not returns.empty:
+        returns = returns.between_time(window[0], window[1]).dropna(how='all')
+        if baseline != "window":
+            title_base = f"{title_base} · ventana {window[0]:%H:%M}–{window[1]:%H:%M}"
+
+    if returns.empty or returns.shape[1] == 0 or len(returns) < 2:
         print("DEBUG: returns quedó vacío después de limpiar. Ningún ticker válido.")
         return None
 
     if late_starters and baseline == "open":
-        title_base = "desde Apertura (algunos tickers empezaron tarde)"
+        title_base = title_base.replace("desde Apertura", "desde Apertura (algunos tickers empezaron tarde)", 1)
 
     # Limit & sort
     final_returns = returns.iloc[-1].dropna()
@@ -319,9 +370,11 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         pass
 
     if n_points > 10:
-        start_time = returns.index[0]
-        end_time = returns.index[-1]
-        tick_times = pd.date_range(start=start_time.floor('30min'), end=end_time.ceil('30min'), freq='30min')
+        t0 = returns.index[0]
+        t1 = returns.index[-1]
+        span_min = (t1 - t0).total_seconds() / 60
+        tick_freq = '5min' if span_min <= 60 else '10min' if span_min <= 120 else '30min'
+        tick_times = pd.date_range(start=t0.floor(tick_freq), end=t1.ceil(tick_freq), freq=tick_freq)
         tick_locs = []
         tick_labels = []
         for t in tick_times:
@@ -338,6 +391,19 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     ax.set_xlim(-0.5, n_points * 1.08)
     ax.grid(True, color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
+
+    # Líneas verticales de referencia (sutiles)
+    for t_ref, label in _parse_ref_times(ref_times):
+        ref_ts = returns.index[0].normalize().replace(hour=t_ref.hour, minute=t_ref.minute)
+        if ref_ts < returns.index[0] or ref_ts > returns.index[-1]:
+            print(f"DEBUG: referencia {t_ref:%H:%M} fuera del rango mostrado, se omite")
+            continue
+        idx = int(np.argmin(np.abs((returns.index - ref_ts).total_seconds())))
+        ax.axvline(x=idx, color='#9a9ac0', linestyle=':', linewidth=1.0, alpha=0.45, zorder=2)
+        ax.text(idx, 0.985, f" {label or t_ref.strftime('%H:%M')} ",
+                transform=ax.get_xaxis_transform(), rotation=90, va='top', ha='right',
+                fontsize=10, color='#b4b4d8', alpha=0.8, zorder=3,
+                bbox=dict(facecolor=BG_COLOR, alpha=0.6, edgecolor='none', pad=1.5))
 
     title = custom_title or group_name
     fig.suptitle(f"Evolución Intradía (NY Time) – {title_base}\n{title}",
