@@ -3,28 +3,72 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import mtaurus_style  # noqa: F401  (tipografía compartida)
-from datetime import datetime, timedelta, time as dtime
+from matplotlib.colors import hsv_to_rgb, to_rgb, to_hex
+from datetime import datetime, timedelta
 from scipy.interpolate import make_interp_spline
 from adjustText import adjust_text
+from functools import lru_cache
 import os
 import warnings
+
 warnings.filterwarnings("ignore")
 
 # ===================== CONFIG =====================
-from mtaurus_style import BG_COLOR, PAPER_COLOR, TEXT_COLOR  # noqa: E402  (paleta compartida)
-GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)  # propio de este gráfico (el compartido usa alpha 0.22)
+BG_COLOR = '#0f0f1a'
+PAPER_COLOR = '#05050f'
+TEXT_COLOR = '#e0e0ff'
+GRID_COLOR = (120 / 255, 120 / 255, 140 / 255, 0.25)
 
-LINE_COLORS = [
-    '#ff7070', '#40c0ff', '#00e673', '#ffd700', '#ba55d3',
-    '#32cd32', '#1e90ff', '#ff8c00', '#ff69b4', '#7fff00',
-    '#ff1493', '#00ffff', '#adff2f', '#ff4500', '#9370db',
-    '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeead',
-    '#ff9ff3', '#54a0ff', '#5f27cd', '#00d2d3', '#ff9f43',
-    '#ee5253', '#10ac84', '#0abde3', '#f368e0', '#3f72af',
-    '#ff4757', '#3742fa', '#2ed573', '#ffa502', '#c44569'
-]
 plt.style.use('dark_background')
+
+
+# ===================== PALETA DISTINGUIBLE =====================
+def _srgb_to_lab(rgb):
+    """sRGB (0-1) -> CIELAB (D65). Acepta (3,) o (N,3)."""
+    rgb = np.atleast_2d(rgb)
+    lin = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    M = np.array([[0.4124, 0.3576, 0.1805],
+                  [0.2126, 0.7152, 0.0722],
+                  [0.0193, 0.1192, 0.9505]])
+    xyz = (lin @ M.T) / np.array([0.95047, 1.0, 1.08883])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    L = 116 * f[:, 1] - 16
+    a = 500 * (f[:, 0] - f[:, 1])
+    b = 200 * (f[:, 1] - f[:, 2])
+    return np.stack([L, a, b], axis=1)
+
+
+@lru_cache(maxsize=1)
+def _build_palette(n_max=40, bg=BG_COLOR, min_L=55, min_bg_dist=40):
+    """
+    Farthest-point sampling en CIELAB: cada color nuevo es el más lejano
+    (perceptualmente) de los ya elegidos. Los primeros N son siempre los N
+    más distintos posibles. Se descartan colores oscuros o parecidos al fondo.
+    """
+    h, s, v = np.meshgrid(np.arange(0, 1, 1 / 72),
+                          [0.55, 0.75, 0.95],
+                          [0.80, 0.92, 1.0])
+    cand = hsv_to_rgb(np.stack([h.ravel(), s.ravel(), v.ravel()], axis=1))
+    lab = _srgb_to_lab(cand)
+    bg_lab = _srgb_to_lab(np.array(to_rgb(bg)))[0]
+
+    ok = (lab[:, 0] >= min_L) & (np.linalg.norm(lab - bg_lab, axis=1) >= min_bg_dist)
+    cand, lab = cand[ok], lab[ok]
+
+    chosen = [int(np.argmax(np.linalg.norm(lab - bg_lab, axis=1)))]
+    min_d = np.linalg.norm(lab - lab[chosen[0]], axis=1)
+    while len(chosen) < min(n_max, len(cand)):
+        nxt = int(np.argmax(min_d))
+        chosen.append(nxt)
+        min_d = np.minimum(min_d, np.linalg.norm(lab - lab[nxt], axis=1))
+    return [to_hex(cand[i]) for i in chosen]
+
+
+def get_line_colors(n):
+    """Devuelve n colores lo más distintos posible entre sí."""
+    pal = _build_palette()
+    return [pal[i % len(pal)] for i in range(n)]
+
 
 # ==================== DIVIDENDS ADJUSTMENTS ====================
 DIVIDENDS = {
@@ -32,6 +76,7 @@ DIVIDENDS = {
         (datetime(2026, 4, 14), 22.68)
     ]
 }
+
 
 def apply_dividend_adjustments(df):
     if df is None or df.empty:
@@ -43,6 +88,7 @@ def apply_dividend_adjustments(df):
                 df.loc[mask, ticker] -= amount
     return df
 
+
 # ===================== HELPERS =====================
 def find_closest_trading_day(df, target_date):
     if df.empty:
@@ -52,6 +98,7 @@ def find_closest_trading_day(df, target_date):
     if not past_dates.empty:
         return past_dates.max()
     return df.index.min()
+
 
 def fetch_data(tickers, start_date):
     end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
@@ -64,14 +111,17 @@ def fetch_data(tickers, start_date):
     data = data.ffill(limit=5).bfill(limit=5)
     return data
 
+
 def fetch_ccl_proxy(start_date):
     end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-    ccl_data = yf.download(['YPFD.BA', 'YPF'], start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
+    ccl_data = yf.download(['YPFD.BA', 'YPF'], start=start_date, end=end_date,
+                           progress=False, auto_adjust=True)['Close']
     if ccl_data.empty or 'YPFD.BA' not in ccl_data.columns or 'YPF' not in ccl_data.columns:
         return None
     ccl_ratio = ccl_data['YPFD.BA'] / ccl_data['YPF']
     ccl_ratio = ccl_ratio.interpolate(method='time').ffill().bfill()
     return ccl_ratio
+
 
 def get_reference_date(period: str, now: datetime):
     if period == "YTD":
@@ -90,82 +140,50 @@ def get_reference_date(period: str, now: datetime):
     else:
         return None
 
+
 # ===================== INTRADAY FUNCTIONS =====================
-# ===================== INTRADAY FUNCTIONS =====================
-# ===================== IMPROVED INTRADAY FUNCTIONS =====================
-# ===================== IMPROVED INTRADAY FUNCTIONS =====================
 def fetch_intraday_data(tickers, target_date=None):
     """Fetch 1-minute data for a specific date"""
     if target_date is None:
         target_date = datetime.now().date()
-    
+
     target_dt = pd.to_datetime(target_date)
     start = target_dt - timedelta(days=3)
     end = target_dt + timedelta(days=2)
-    
+
     data = yf.download(
         tickers, start=start, end=end, interval="1m",
         progress=False, prepost=False, auto_adjust=True
     )['Close']
-    
+
     if isinstance(data, pd.Series):
         data = data.to_frame()
+
     if data.empty:
         return pd.DataFrame()
-    
+
     data = data.dropna(how='all').dropna(axis=1, how='all')
-    
+
     # Robust timezone handling
     if hasattr(data.index, 'tz') and data.index.tz is not None:
         data.index = data.index.tz_convert(None)
-    
+
     target_date_only = target_dt.date()
     data = data[data.index.date == target_date_only]
-    
+
     data = data.ffill(limit=5).bfill(limit=5)
     return data
 
 
-def _parse_time_arg(value):
-    """Acepta None, un datetime.time, o un string 'HH:MM' / 'HH:MM:SS'. Devuelve datetime.time o None."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, dtime):
-        return value
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                return datetime.strptime(value, fmt).time()
-            except ValueError:
-                continue
-        raise ValueError(f"Formato de hora inválido: {value!r}. Usá HH:MM.")
-    raise TypeError(f"Tipo de hora no soportado: {type(value)}")
-
-
-def _nearest_index_for_time(index, t):
-    """Encuentra la posición entera más cercana a la hora `t` dentro de un DatetimeIndex."""
-    ref_ts = pd.Timestamp.combine(index[0].date(), t)
-    if index.tz is not None:
-        ref_ts = ref_ts.tz_localize(index.tz)
-    deltas = np.abs((index - ref_ts).total_seconds())
-    return int(np.argmin(deltas))
-
-
 def run_intraday_evolution(tickers, group_name="Activos", custom_title=None,
-                          max_lines=15, smooth=True, baseline="open", target_date=None,
-                          start_time=None, end_time=None, ref_times=None):
+                           max_lines=15, smooth=True, baseline="open", target_date=None):
     df = fetch_intraday_data(tickers, target_date)
     if df.empty:
         return None
-    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline,
-                                    start_time=start_time, end_time=end_time, ref_times=ref_times)
+    return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline)
 
 
-def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open",
-                             start_time=None, end_time=None, ref_times=None):
+def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open"):
     if df.empty or len(df) < 5:
         print("DEBUG: df intraday vacío o muy pequeño")
         return None
@@ -180,10 +198,6 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
     print(f"DEBUG: Datos intraday para {len(df)} minutos, tickers: {list(df.columns)}")
     print(f"DEBUG: Rango de tiempo: {df.index[0]} → {df.index[-1]}")
-
-    # Parseamos la ventana horaria acá arriba porque el baseline "window" la necesita
-    start_t = _parse_time_arg(start_time)
-    end_t = _parse_time_arg(end_time)
 
     returns = pd.DataFrame(index=df.index)
     late_starters = []
@@ -206,35 +220,15 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                 late_starters.append(col)
             title_base = "desde Apertura"
             print(f"DEBUG: {col} (Apertura) base = {ticker_base:.4f} at {series.index[0]}")
-        elif baseline == "window":
-            window_series = series
-            if start_t is not None:
-                window_series = window_series[window_series.index.time >= start_t]
-            if end_t is not None:
-                window_series = window_series[window_series.index.time <= end_t]
-            if not window_series.empty:
-                ticker_base = float(window_series.iloc[0])
-                base_time = window_series.index[0]
-            else:
-                # El ticker no tiene datos dentro de la ventana elegida: usamos su primer dato disponible
-                ticker_base = float(series.iloc[0])
-                base_time = series.index[0]
-                late_starters.append(col)
-            title_base = "desde Apertura de la Ventana"
-            print(f"DEBUG: {col} (Ventana) base = {ticker_base:.4f} at {base_time}")
         else:
             # Cierre anterior
             target_date = series.index[0].date()
             daily_end = pd.to_datetime(target_date)
             daily_start = daily_end - timedelta(days=10)
-            
             print(f"DEBUG: {col} buscando previous close. daily_start={daily_start.date()}, daily_end={daily_end.date()}")
-            
-            daily = yf.download(col, start=daily_start, end=daily_end, 
-                              progress=False, auto_adjust=True)['Close']
-            
+            daily = yf.download(col, start=daily_start, end=daily_end,
+                                progress=False, auto_adjust=True)['Close']
             print(f"DEBUG: {col} daily data shape: {daily.shape}, dates: {list(daily.index.date) if not daily.empty else 'empty'}")
-            
             if not daily.empty:
                 prev_closes = daily[daily.index.date < target_date]
                 if not prev_closes.empty:
@@ -251,65 +245,48 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         returns[col] = (series / ticker_base - 1) * 100
 
     returns = returns.dropna(axis=1, how='all')
+
     if returns.empty or returns.shape[1] == 0:
         print("DEBUG: returns quedó vacío después de limpiar. Ningún ticker válido.")
         return None
 
     if late_starters and baseline == "open":
         title_base = "desde Apertura (algunos tickers empezaron tarde)"
-    if late_starters and baseline == "window":
-        title_base = "desde Apertura de la Ventana (algunos tickers empezaron tarde)"
-
-    # === Ventana horaria opcional (recorta lo que se muestra en el gráfico) ===
-    if start_t is not None or end_t is not None:
-        idx_times = returns.index.time
-        mask = np.ones(len(returns), dtype=bool)
-        if start_t is not None:
-            mask &= (idx_times >= start_t)
-        if end_t is not None:
-            mask &= (idx_times <= end_t)
-        if mask.any():
-            returns = returns.loc[mask]
-        else:
-            print(f"DEBUG: la ventana horaria {start_time}-{end_time} no contiene datos, se ignora el filtro")
-
-    # === Bulletproofing: rellenamos huecos para que ninguna línea/etiqueta se pierda por NaN ===
-    returns = returns.ffill()
-    returns = returns.dropna(axis=1, how='all')
-    if returns.empty or returns.shape[1] == 0:
-        print("DEBUG: returns quedó vacío después del recorte de horario / ffill.")
-        return None
 
     # Limit & sort
     final_returns = returns.iloc[-1].dropna()
     if len(returns.columns) > max_lines:
-        top = list(final_returns.nlargest(max_lines//2).index)
-        bot = list(final_returns.nsmallest(max_lines//2).index)
+        top = list(final_returns.nlargest(max_lines // 2).index)
+        bot = list(final_returns.nsmallest(max_lines // 2).index)
         selected = list(dict.fromkeys(top + bot))
         returns = returns[selected]
 
     sorted_cols = returns.iloc[-1].sort_values(ascending=False).index
     returns = returns[sorted_cols]
 
+    # Paleta de colores distinguibles
+    colors = get_line_colors(len(returns.columns))
+
     # === PLOTTING ===
     fig = plt.figure(figsize=(17, 9.5), facecolor=PAPER_COLOR)
     ax = fig.add_subplot(111, facecolor=BG_COLOR)
+
     n_points = len(returns.index)
     x_numeric = np.arange(n_points)
     line_ends = {}
 
     for i, ticker in enumerate(returns.columns):
-        color = LINE_COLORS[i % len(LINE_COLORS)]
+        color = colors[i]
         y = returns[ticker].values
         line_ends[ticker] = (n_points - 1, y[-1])
 
-        if smooth and n_points > 4 and np.all(np.isfinite(y)):
+        if smooth and n_points > 4:
             try:
                 spline = make_interp_spline(x_numeric, y, k=2)
-                x_s = np.linspace(0, n_points-1, 400)
+                x_s = np.linspace(0, n_points - 1, 400)
                 y_s = spline(x_s)
                 ax.plot(x_s, y_s, color=color, linewidth=2.2, alpha=0.9)
-            except Exception:
+            except:
                 ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9)
         else:
             ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9)
@@ -318,126 +295,33 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     y_max = np.nanmax(returns.values)
     if not np.isfinite(y_min): y_min = -20
     if not np.isfinite(y_max): y_max = 20
+    ax.set_ylim(y_min - abs(y_min) * 0.2, y_max + abs(y_max) * 0.2)
 
-    ax.set_ylim(y_min - abs(y_min)*0.2, y_max + abs(y_max)*0.2)
     ax.axhline(0, color='#ff4d4d', linewidth=1.5, linestyle='--', alpha=0.8)
-    ax.fill_between([-0.5, n_points*2], 0, y_max+100, color='green', alpha=0.02)
-    ax.fill_between([-0.5, n_points*2], 0, y_min-100, color='red', alpha=0.02)
+    ax.fill_between([-0.5, n_points * 2], 0, y_max + 100, color='green', alpha=0.02)
+    ax.fill_between([-0.5, n_points * 2], 0, y_min - 100, color='red', alpha=0.02)
 
-    # === Líneas verticales de referencia (sutiles, opcionales) ===
-    if ref_times:
-        y_bottom, y_top = ax.get_ylim()
-        y_range = y_top - y_bottom
-        n_ref = len(ref_times)
-        # Menos líneas de referencia → texto más grande, sin que se amontonen
-        ref_fontsize = float(np.clip(12 - 0.6 * max(n_ref - 1, 0), 8, 12))
-        window = max(3, n_points // 20)
-        ref_texts = []
-
-        for item in ref_times:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                t_raw, ref_label = item
-            elif isinstance(item, str) and "|" in item:
-                t_raw, ref_label = item.split("|", 1)
-                ref_label = ref_label.strip()
-            else:
-                t_raw, ref_label = item, None
-            try:
-                t_obj = _parse_time_arg(t_raw)
-            except Exception:
-                print(f"DEBUG: hora de referencia inválida, se ignora: {t_raw!r}")
-                continue
-            if t_obj is None:
-                continue
-            idx = _nearest_index_for_time(returns.index, t_obj)
-            ax.axvline(x=idx, color='#9090b0', linestyle=':', linewidth=1.0, alpha=0.35, zorder=1)
-            if not ref_label:
-                continue
-
-            # Miramos las líneas de precio cerca de esta marca para decidir si conviene
-            # poner el texto arriba (si hay hueco libre hacia el techo) o abajo (si no lo hay).
-            start_w = max(0, idx - window)
-            end_w = min(n_points, idx + window + 1)
-            local_vals = returns.iloc[start_w:end_w].values
-            local_max = np.nanmax(local_vals) if end_w > start_w else y_top
-            local_min = np.nanmin(local_vals) if end_w > start_w else y_bottom
-            if not np.isfinite(local_max):
-                local_max = y_top
-            if not np.isfinite(local_min):
-                local_min = y_bottom
-
-            space_above = y_top - local_max
-            space_below = local_min - y_bottom
-
-            if space_above >= space_below:
-                y_pos = min(local_max + y_range * 0.05, y_top - y_range * 0.02)
-                va = 'bottom'
-            else:
-                y_pos = max(local_min - y_range * 0.05, y_bottom + y_range * 0.02)
-                va = 'top'
-
-            txt = ax.text(idx, y_pos, ref_label, rotation=90, va=va, ha='center',
-                          fontsize=ref_fontsize, color='#a0a0cc', fontweight='bold',
-                          alpha=0.85, zorder=2,
-                          bbox=dict(facecolor=BG_COLOR, alpha=0.6, edgecolor='none', pad=1.5))
-            ref_texts.append(txt)
-
-        if ref_texts:
-            try:
-                adjust_text(ref_texts, ax=ax, only_move={'texts': 'y'},
-                            expand_text=(1.1, 1.3), force_text=(0.1, 1.0))
-            except Exception:
-                pass
-
-    label_x_pos = n_points + (n_points * 0.05)
+    label_x_pos = n_points + (n_points * 0.04)
     texts = []
-    n_visible_labels = int(np.sum([np.isfinite(returns[t].iloc[-1]) for t in returns.columns]))
-    # Cuantos menos tickers hay que etiquetar, más grande puede ser la fuente sin que se pisen
-    label_fontsize = float(np.clip(14 - 0.28 * max(n_visible_labels - 1, 0), 8, 14))
-
     for i, ticker in enumerate(returns.columns):
-        val = returns[ticker].iloc[-1]
-        if not np.isfinite(val):
-            # No dejamos que un ticker sin valor final válido rompa el layout de las demás etiquetas
-            print(f"DEBUG: {ticker} sin valor final válido, se omite su etiqueta")
-            continue
-        color = LINE_COLORS[i % len(LINE_COLORS)]
-        txt = ax.text(label_x_pos, val,
-                      f" {ticker} ({val:+.2f}%)",
-                      color=color, fontsize=label_fontsize, fontweight='bold',
+        color = colors[i]
+        txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
+                      f" {ticker} ({returns[ticker].iloc[-1]:+.2f}%)",
+                      color=color, fontsize=10, fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
-        txt.set_gid(ticker)
         texts.append(txt)
 
     try:
         adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
                     expand_text=(1.2, 2.2), force_text=(0, 2.5))
-    except Exception:
+    except:
         pass
 
-    # Flecha sutil que conecta cada etiqueta (ya reubicada arriba/abajo por adjust_text)
-    # con el punto real donde termina su línea, para que no haya ambigüedad.
-    for txt in texts:
-        ticker = txt.get_gid()
-        if ticker not in line_ends:
-            continue
-        target_x, target_y = line_ends[ticker]
-        if not np.isfinite(target_y):
-            continue
-        label_x, label_y = txt.get_position()
-        color = txt.get_color()
-        ax.annotate('',
-                    xy=(target_x, target_y),
-                    xytext=(label_x - 0.5, label_y),
-                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8, alpha=0.4,
-                                     shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
-                    zorder=3)
-
     if n_points > 10:
-        start_tick = returns.index[0]
-        end_tick = returns.index[-1]
-        tick_times = pd.date_range(start=start_tick.floor('30min'), end=end_tick.ceil('30min'), freq='30min')
+        start_time = returns.index[0]
+        end_time = returns.index[-1]
+        tick_times = pd.date_range(start=start_time.floor('30min'), end=end_time.ceil('30min'), freq='30min')
         tick_locs = []
         tick_labels = []
         for t in tick_times:
@@ -449,17 +333,17 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         ax.set_xticks(tick_locs)
         ax.set_xticklabels(tick_labels, rotation=45, ha='right')
     else:
-        ax.set_xticks(range(0, n_points, max(1, n_points//8)))
+        ax.set_xticks(range(0, n_points, max(1, n_points // 8)))
         ax.set_xticklabels([returns.index[i].strftime('%H:%M') for i in ax.get_xticks()], rotation=45, ha='right')
 
-    ax.set_xlim(-0.5, n_points * 1.30)
+    ax.set_xlim(-0.5, n_points * 1.08)
     ax.grid(True, color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
 
     title = custom_title or group_name
     fig.suptitle(f"Evolución Intradía (NY Time) – {title_base}\n{title}",
                  fontsize=22, color=TEXT_COLOR, fontweight='bold', y=0.96)
 
-    fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=(140/255,140/255,180/255,0.09),
+    fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=(140 / 255, 140 / 255, 180 / 255, 0.09),
              ha='center', va='center', rotation=30, zorder=999)
 
     plt.tight_layout()
@@ -471,51 +355,50 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
 # ===================== ORIGINAL PLOT & RUNNER =====================
 def plot_returns_evolution(df, group_name, custom_title, period="YTD",
-                          max_lines=20, smooth=True, frequency='D'):
-   
+                           max_lines=20, smooth=True, frequency='D'):
     if df.empty or len(df) < 2:
         return None
-   
+
     freq_map = {
         'D': None,
         'W': 'W-FRI',
         'M': 'ME'
     }
-   
     resample_freq = freq_map.get(frequency.upper())
-   
     if resample_freq:
         df = df.resample(resample_freq).last()
         df = df.dropna(how='all')
         df = df.ffill()
-   
+
     returns = (df / df.iloc[0] - 1) * 100
-   
     if returns.empty or len(returns) < 2:
         return None
-   
+
     final_returns = returns.iloc[-1]
-   
     if len(returns.columns) > max_lines:
         top = list(final_returns.nlargest(max_lines // 2).index)
         bot = list(final_returns.nsmallest(max_lines // 2).index)
         selected = list(dict.fromkeys(top + bot))
         returns = returns[selected]
-   
+
     sorted_cols = returns.iloc[-1].sort_values(ascending=False).index
     returns = returns[sorted_cols]
-   
+
+    # Paleta de colores distinguibles
+    colors = get_line_colors(len(returns.columns))
+
     fig = plt.figure(figsize=(17, 9.5), facecolor=PAPER_COLOR)
     ax = fig.add_subplot(111, facecolor=BG_COLOR)
+
     n_points = len(returns.index)
     x_numeric = np.arange(n_points)
     line_ends = {}
-   
+
     for i, ticker in enumerate(returns.columns):
-        color = LINE_COLORS[i % len(LINE_COLORS)]
+        color = colors[i]
         y = returns[ticker].values
         line_ends[ticker] = (n_points - 1, y[-1])
-       
+
         if smooth and n_points > 4:
             try:
                 spline = make_interp_spline(x_numeric, y, k=2)
@@ -526,11 +409,10 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                 ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9, zorder=4)
         else:
             ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9, zorder=4)
-   
+
     years = returns.index.year
     year_changes = np.where(years[1:] != years[:-1])[0] + 1
     year_texts = []
-   
     for idx in year_changes:
         year = returns.index[idx].year
         x_pos = idx
@@ -542,14 +424,13 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
         y_max_plot = ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 100
         if y_pos > y_max_plot * 0.94:
             y_pos = y_max_plot * 0.88
-       
         txt = ax.text(x_pos, y_pos, str(year),
                       rotation=90, va='bottom', ha='center', fontsize=11,
                       color='#a0a0cc', fontweight='bold', alpha=0.9,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.75, edgecolor='none', pad=3))
         year_texts.append(txt)
         ax.axvline(x=idx, color='#666688', linestyle='--', linewidth=1.1, alpha=0.55, zorder=2)
-   
+
     if year_texts:
         try:
             adjust_text(year_texts, ax=ax,
@@ -559,19 +440,21 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                         arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.3))
         except:
             pass
-   
+
     y_min, y_max = returns.min().min(), returns.max().max()
     y_range = y_max - y_min
     ax.set_ylim(y_min - y_range * 0.15, y_max + y_range * 0.15)
+
     ax.fill_between([-0.5, n_points * 2], 0, y_max + 100, color='green', alpha=0.02)
     ax.fill_between([-0.5, n_points * 2], 0, y_min - 100, color='red', alpha=0.02)
     ax.axhline(0, color='#ff4d4d', linewidth=1.5, linestyle='--', alpha=0.8)
+
     ax.set_xlim(-0.5, n_points * 1.35)
-   
+
     label_x_pos = n_points + (n_points * 0.05)
     texts = []
     for i, ticker in enumerate(returns.columns):
-        color = LINE_COLORS[i % len(LINE_COLORS)]
+        color = colors[i]
         txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
                       f" {ticker} ({final_returns[ticker]:+.1f}%)",
                       color=color, fontsize=10, fontweight='bold',
@@ -579,13 +462,13 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
         txt.set_gid(ticker)
         texts.append(txt)
-   
+
     try:
         adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
                     expand_text=(1.2, 2.2), force_text=(0, 2.5))
     except:
         pass
-   
+
     for txt in texts:
         ticker = txt.get_gid()
         target_x, target_y = line_ends[ticker]
@@ -597,42 +480,45 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                     arrowprops=dict(arrowstyle="->", color=color, lw=0.8, alpha=0.4,
                                     shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
                     zorder=3)
-   
+
     ax.set_xticks(range(0, n_points, max(1, n_points // 12)))
     ax.set_xticklabels([returns.index[i].strftime('%b %d') for i in ax.get_xticks()],
                        rotation=45, ha='right')
+
     ax.grid(True, color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
-   
+
     freq_names = {'D': 'Diaria', 'W': 'Semanal', 'M': 'Mensual'}
     freq_text = freq_names.get(frequency.upper(), 'Diaria')
     title_period = f"{period} Evolution ({freq_text})"
+
     fig.suptitle(f"Evolución de Retornos Acumulados\n{title_period} — {custom_title or group_name}",
                  fontsize=22, color=TEXT_COLOR, fontweight='bold', y=0.96)
-   
-    fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=(140/255,140/255,180/255,0.09),
+
+    fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=(140 / 255, 140 / 255, 180 / 255, 0.09),
              ha='center', va='center', rotation=30, zorder=999)
-   
+
     plt.tight_layout()
     output_path = "returns_evolution.png"
     plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close(fig)
     return output_path
 
+
 def run_returns_evolution(
-    tickers,
-    period="YTD",
-    start_date=None,
-    group_name="Activos",
-    custom_title=None,
-    max_lines=20,
-    exclude_tickers=None,
-    smooth=True,
-    ccl_adjust=False,
-    frequency='D',
-    custom_start_date=None
+        tickers,
+        period="YTD",
+        start_date=None,
+        group_name="Activos",
+        custom_title=None,
+        max_lines=20,
+        exclude_tickers=None,
+        smooth=True,
+        ccl_adjust=False,
+        frequency='D',
+        custom_start_date=None
 ):
     now = datetime.now()
-   
+
     if not start_date:
         period_upper = period.upper()
         if period_upper == "YTD":
@@ -642,22 +528,22 @@ def run_returns_evolution(
         else:
             days = {"1Y": 365, "2Y": 730, "5Y": 1825}.get(period_upper, 365)
             start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-   
+
     fetch_start = start_date
     if custom_start_date:
         fetch_start = (datetime.combine(custom_start_date, datetime.min.time()) - timedelta(days=30)).strftime("%Y-%m-%d")
-   
+
     df = fetch_data(tickers, fetch_start)
-   
+
     if exclude_tickers:
         exclude_list = [t.strip().upper() for t in exclude_tickers.split(",") if t.strip()]
         df = df.drop(columns=[c for c in exclude_list if c in df.columns], errors='ignore')
-   
+
     if df.empty:
         return None
-   
+
     df_for_plot = df.copy()
-   
+
     if custom_start_date:
         baseline_idx = find_closest_trading_day(df, custom_start_date)
         if baseline_idx is not None:
@@ -673,7 +559,7 @@ def run_returns_evolution(
             if mask.any():
                 baseline_idx = df.index[mask].max()
                 df_for_plot = df.loc[baseline_idx:].copy()
-   
+
     if ccl_adjust:
         ccl_ratio = fetch_ccl_proxy(fetch_start)
         if ccl_ratio is not None:
@@ -682,7 +568,7 @@ def run_returns_evolution(
             custom_title = (custom_title + " (Ajustado CCL)" if custom_title else "Ajustado CCL")
         else:
             print("Warning: Could not fetch CCL proxy correctly.")
-   
+
     return plot_returns_evolution(
         df_for_plot,
         group_name,
@@ -692,6 +578,7 @@ def run_returns_evolution(
         smooth=smooth,
         frequency=frequency
     )
+
 
 # ===================== CLI =====================
 if __name__ == "__main__":
@@ -705,7 +592,9 @@ if __name__ == "__main__":
     parser.add_argument('--smooth', type=str, default='s')
     parser.add_argument('--ccl_adjust', action='store_true')
     args = parser.parse_args()
+
     is_smooth = args.smooth.lower() in ['s', 'true', '1', 'yes']
+
     path = run_returns_evolution(
         args.tickers, args.period, None, args.group_name,
         args.custom_title, args.max_lines, args.exclude_tickers, is_smooth, args.ccl_adjust
