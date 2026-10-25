@@ -696,6 +696,18 @@ elif tool == "Performance":
         elif custom_start_date_2 is not None and custom_start_date_2 == custom_start_date:
             st.warning("Las dos fechas de inicio son iguales: elegí fechas distintas.")
         else:
+            # Si performance_plot.py desplegado es una versión anterior a este app.py, avisar en claro
+            # (en vez de un TypeError) y no dibujar: un gráfico sin la 2.ª fecha podría publicarse por error.
+            import inspect
+            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style"]
+            _missing = [k for k in _needed if k not in inspect.signature(run_performance).parameters]
+            if _missing:
+                st.error(
+                    "El performance_plot.py desplegado es una versión anterior a este app.py: no acepta "
+                    + ", ".join(_missing) + ". Subí la versión nueva de performance_plot.py "
+                    "(junto con mtaurus_style.py) y reiniciá la app."
+                )
+                st.stop()
             path = run_performance(
                 tickers,
                 period=period,
