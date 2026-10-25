@@ -335,7 +335,7 @@ def create_bar_plot(performance, title, period_label, name_mapping,
 
 
 def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labels,
-                         filename="performance_chart.png", subtitle=None, style="auto"):
+                         filename="performance_chart.png", subtitle=None, style="auto", value_tags=None):
     """Barras horizontales con DOS fechas de inicio (columnas 'A' y 'B' de perf_df, ya ordenadas).
 
     style:
@@ -344,6 +344,8 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
       'bullet'  una fila por ticker: barra ancha para A y barra fina clara encima para B.
                 Escala mejor a muchos tickers.
       'auto'    paired hasta AUTO_DUAL_PAIRED_MAX tickers, bullet por encima.
+
+    value_tags: ('YTD','MTD') opcional; en 'paired' agrega esa abreviatura, más chica y tenue, después de cada valor.
 
     Siempre horizontal (con dos series el texto rotado 90° no entra). Las dos series comparten la
     misma escala de color, así que los colores son comparables entre A y B.
@@ -412,16 +414,22 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
     # (izquierda a derecha). A la derecha de la barra se apilan hacia afuera en ese orden; a la
     # izquierda, en orden inverso, para que el texto se lea igual en ambos lados.
     groups = []
+    tag_fs = max(8, value_fs - 3)
+    tag_color = (*mcolors.to_rgb(TICK_COLOR), 0.7)
+
+    def tag_part(k):   # abreviatura del período tras el valor (solo con 'paired' y value_tags)
+        return [(str(value_tags[k]), tag_color, tag_fs, 'normal')] if (paired and value_tags) else []
+
     for i, (nm, a, b) in enumerate(zip(names, vals_a, vals_b)):
         a_ok, b_ok = not pd.isna(a), not pd.isna(b)
         ticker_part = (nm, TEXT_COLOR, ticker_fs)
         if paired:
             if a_ok:
                 groups.append(dict(y=i - 0.2, positive=a >= 0, anchor=a,
-                                   parts=[ticker_part, (f'{a:.1f}%', TEXT_COLOR, value_fs)]))
+                                   parts=[ticker_part, (f'{a:.1f}%', TEXT_COLOR, value_fs)] + tag_part(0)))
             if b_ok:
                 # el ticker también acompaña a B (un poco más tenue), así cada barra se identifica sola
-                parts = [(nm, TICK_COLOR, ticker_fs), (f'{b:.1f}%', TEXT_COLOR, value_fs)]
+                parts = [(nm, TICK_COLOR, ticker_fs), (f'{b:.1f}%', TEXT_COLOR, value_fs)] + tag_part(1)
                 groups.append(dict(y=i + 0.2, positive=b >= 0, anchor=b, parts=parts))
         else:
             ticker_side = (a >= 0) if a_ok else (b >= 0)
@@ -442,10 +450,12 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
     all_anns = []   # (anotación, positive) para ajustar el eje
     for g in groups:
         g['anns'] = []
-        for text, color, fs in g['parts']:
+        for part in g['parts']:
+            text, color, fs = part[:3]
+            weight = part[3] if len(part) > 3 else 'bold'
             ann = ax.annotate(text, xy=(g['anchor'], g['y']), xytext=(0, 0), textcoords='offset points',
                               ha='left' if g['positive'] else 'right', va='center', color=color,
-                              fontsize=fs, fontweight='bold', zorder=5, annotation_clip=False)
+                              fontsize=fs, fontweight=weight, zorder=5, annotation_clip=False)
             g['anns'].append(ann)
             all_anns.append((ann, g['positive']))
 
@@ -662,7 +672,8 @@ def run_performance(
             name_mapping,
             series_labels,
             subtitle=subtitle,
-            style=dual_style
+            style=dual_style,
+            value_tags=compare_periods if quick else None
         )
 
     reference_prices = None
