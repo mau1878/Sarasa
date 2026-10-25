@@ -512,6 +512,41 @@ def _lighten(color, amount=0.3):
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
 
 
+QUICK_PERIODS = ("YTD", "MTD", "WTD", "1Y", "2Y", "5Y")
+
+
+def _period_spec(period, now):
+    """(target_ref_date, start_date) de un período predefinido. target_ref_date es el último día cuyo
+    cierre sirve de base (None = base en el primer dato desde start_date). Misma lógica de siempre."""
+    target_ref_date = None
+    if period == "YTD":
+        target_ref_date = datetime(now.year - 1, 12, 31).date()
+        start_date = (now.replace(month=1, day=1) - timedelta(days=15)).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "1Y":
+        start_date = now - timedelta(days=365)
+    elif period == "2Y":
+        start_date = now - timedelta(days=365 * 2)
+    elif period == "5Y":
+        start_date = now - timedelta(days=365 * 5)
+    elif period == "MTD":
+        if now.month == 1:
+            prev_month_end = datetime(now.year - 1, 12, 31)
+        else:
+            prev_month_end = datetime(now.year, now.month, 1) - timedelta(days=1)
+        target_ref_date = prev_month_end.date()
+        start_date = (now - timedelta(days=70)).replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "WTD":
+        weekday = now.weekday()
+        days_back = (weekday - 4) % 7 + 7
+        if weekday == 4:
+            days_back = 7
+        target_ref_date = (now - timedelta(days=days_back)).date()
+        start_date = (now - timedelta(days=25)).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start_date = now - timedelta(days=365)
+    return target_ref_date, start_date
+
+
 # ===================== UPDATED RUNNER WITH CUSTOM START DATE =====================
 def run_performance(
     tickers,
@@ -526,7 +561,8 @@ def run_performance(
     label_a=None,            # nombre opcional de la 1.ª fecha en la leyenda (solo con 2 fechas)
     label_b=None,            # nombre opcional de la 2.ª fecha en la leyenda (solo con 2 fechas)
     sort_by="A",             # 'A' | 'B': por qué fecha se ordenan los tickers (solo con 2 fechas)
-    dual_style="auto"        # 'auto' | 'paired' | 'bullet' (solo con 2 fechas)
+    dual_style="auto",       # 'auto' | 'paired' | 'bullet' (solo con 2 fechas)
+    compare_periods=None     # ('YTD','MTD'): compara dos períodos predefinidos (sin fechas a mano)
 ):
     name_mapping = load_ticker_names(tickers_file) if tickers_file else {}
 
@@ -538,41 +574,27 @@ def run_performance(
 
     # Con dos fechas de inicio se compara cada una contra el mismo último precio.
     # (La 2.ª fecha sola, sin una 1.ª fecha personalizada, no tiene sentido y se ignora.)
-    dual = bool(custom_start_date and custom_start_date_2)
-    if custom_start_date_2 and not custom_start_date:
+    quick = bool(compare_periods) and not custom_start_date
+    if quick:
+        compare_periods = tuple(compare_periods)
+        if len(compare_periods) != 2 or compare_periods[0] == compare_periods[1] \
+                or any(p not in QUICK_PERIODS for p in compare_periods):
+            print(f"Warning: comparación rápida inválida: {compare_periods}")
+            return None
+    dual = bool(custom_start_date and custom_start_date_2) or quick
+    if custom_start_date_2 and not custom_start_date and not quick:
         print("Warning: la 2.ª fecha de inicio se ignora si no hay una 1.ª fecha de inicio personalizada.")
 
-    if custom_start_date:
+    if quick:
+        specs = [_period_spec(pp, now) for pp in compare_periods]
+        start_date = min(sp[1] for sp in specs)
+    elif custom_start_date:
         start_date = custom_start_date
         if dual:   # bajar datos desde la más antigua de las dos
             start_date = min(pd.Timestamp(custom_start_date), pd.Timestamp(custom_start_date_2)).to_pydatetime()
         custom_label = f"desde {custom_start_date.strftime('%d/%m/%Y')}"
     else:
-        if period == "YTD":
-            target_ref_date = datetime(now.year - 1, 12, 31).date()
-            start_date = (now.replace(month=1, day=1) - timedelta(days=15)).replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "1Y":
-            start_date = now - timedelta(days=365)
-        elif period == "2Y":
-            start_date = now - timedelta(days=365 * 2)
-        elif period == "5Y":
-            start_date = now - timedelta(days=365 * 5)
-        elif period == "MTD":
-            if now.month == 1:
-                prev_month_end = datetime(now.year - 1, 12, 31)
-            else:
-                prev_month_end = datetime(now.year, now.month, 1) - timedelta(days=1)
-            target_ref_date = prev_month_end.date()
-            start_date = (now - timedelta(days=70)).replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "WTD":
-            weekday = now.weekday()
-            days_back = (weekday - 4) % 7 + 7
-            if weekday == 4:
-                days_back = 7
-            target_ref_date = (now - timedelta(days=days_back)).date()
-            start_date = (now - timedelta(days=25)).replace(hour=0, minute=0, second=0, microsecond=0)
-        else:
-            start_date = now - timedelta(days=365)
+        target_ref_date, start_date = _period_spec(period, now)
 
     data = fetch_data(tickers, start_date, end_date)
     if data is None or data.empty:
@@ -593,22 +615,46 @@ def run_performance(
     # ---------- Dos fechas de inicio ----------
     if dual:
         perfs, firsts = [], []
-        for d in (custom_start_date, custom_start_date_2):
-            # igual que con una fecha: base = cierre del primer día hábil desde esa fecha
-            sub = data.loc[data.index >= pd.Timestamp(d)].dropna(how='all')
-            if sub.empty:
-                return None
-            perfs.append(calculate_performance(sub))
-            firsts.append(sub.index[0])
+        if quick:
+            # igual que con un solo período: base = cierre del último día hábil <= fecha de referencia
+            # (YTD/MTD/WTD) o primer dato desde la fecha de inicio (1Y/2Y/5Y)
+            for (ref_date, st_date) in specs:
+                reference_prices, base_idx = None, None
+                if ref_date is not None:
+                    valid = data.index[pd.Series(data.index.date <= ref_date, index=data.index)]
+                    if len(valid) > 0:
+                        base_idx = valid.max()
+                        reference_prices = data.loc[base_idx]
+                sub = data if reference_prices is not None else data.loc[data.index >= pd.Timestamp(st_date)]
+                sub = sub.dropna(how='all')
+                if sub.empty:
+                    return None
+                perfs.append(calculate_performance(sub, reference_prices))
+                firsts.append(base_idx if base_idx is not None else sub.index[0])
+        else:
+            for d in (custom_start_date, custom_start_date_2):
+                # igual que con una fecha: base = cierre del primer día hábil desde esa fecha
+                sub = data.loc[data.index >= pd.Timestamp(d)].dropna(how='all')
+                if sub.empty:
+                    return None
+                perfs.append(calculate_performance(sub))
+                firsts.append(sub.index[0])
         perf_df = pd.concat([perfs[0].rename('A'), perfs[1].rename('B')], axis=1)
         perf_df = perf_df.sort_values(by='B' if str(sort_by).upper() == 'B' else 'A',
                                       ascending=False, na_position='last')
         end_str = data.index[-1].strftime('%d/%m/%Y')
         a_str, b_str = firsts[0].strftime('%d/%m/%Y'), firsts[1].strftime('%d/%m/%Y')
         # Con nombre propio, la leyenda suma la fecha real del baseline entre paréntesis
-        series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip() else f"Desde {a_str}",
-                         f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip() else f"Desde {b_str}"]
-        period_label = f"Periodo: desde {a_str} y desde {b_str} hasta {end_str}"
+        if quick:
+            series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip()
+                             else f"{compare_periods[0]} (base: cierre {a_str})",
+                             f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip()
+                             else f"{compare_periods[1]} (base: cierre {b_str})"]
+            period_label = f"Periodo: {compare_periods[0]} y {compare_periods[1]} hasta {end_str}"
+        else:
+            series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip() else f"Desde {a_str}",
+                             f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip() else f"Desde {b_str}"]
+            period_label = f"Periodo: desde {a_str} y desde {b_str} hasta {end_str}"
         return create_dual_bar_plot(
             perf_df,
             f"Performance: {group_name}",

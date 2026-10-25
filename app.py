@@ -602,6 +602,7 @@ elif tool == "Intradía":
 # ---- Performance ----
 # ---- Performance ----
 elif tool == "Performance":
+    QUICK_PAIR_OPTIONS = ["YTD vs MTD", "YTD vs WTD", "MTD vs WTD", "1Y vs YTD", "2Y vs 1Y", "5Y vs 1Y"]
     groups = load_ticker_groups()
     group_names = ["(ninguno)"] + [g["name"] for g in groups]
     selected_group = st.selectbox("Grupo predefinido (tickergroups.json)", group_names)
@@ -646,17 +647,33 @@ elif tool == "Performance":
                 "Nombre de la 2.ª fecha (opcional)", "",
                 placeholder="Ej.: Cierre del lunes posterior a la 1.ª vuelta",
             )
-            sort_label = st.radio("Ordenar por", ["1.ª fecha", "2.ª fecha"], horizontal=True)
-            sort_by = "A" if sort_label == "1.ª fecha" else "B"
-            style_label = st.selectbox(
-                "Estilo (2 fechas)",
-                ["Automático", "Barras pareadas", "Barra ancha + barra fina"],
-                help="Automático: barras pareadas hasta ~24 tickers; con más, barra ancha (1.ª fecha) "
-                     "+ barra fina (2.ª fecha). Con dos fechas el gráfico siempre es horizontal.",
-            )
-            dual_style = {"Automático": "auto", "Barras pareadas": "paired",
-                          "Barra ancha + barra fina": "bullet"}[style_label]
-    
+
+    # Comparación rápida: dos períodos predefinidos, sin elegir fechas a mano
+    quick_pair = None
+    if not use_custom_start:
+        quick_label = st.selectbox(
+            "Comparación rápida (2 períodos)",
+            ["Ninguna"] + QUICK_PAIR_OPTIONS,
+            help="Compara dos períodos en el mismo gráfico sin elegir fechas. "
+                 "Si elegís una combinación, se ignora el selector «Período».",
+        )
+        if quick_label != "Ninguna":
+            quick_pair = tuple(quick_label.split(" vs "))
+
+    if custom_start_date_2 is not None or quick_pair:
+        by_date = custom_start_date_2 is not None
+        sort_label = st.radio("Ordenar por", ["1.ª fecha", "2.ª fecha"] if by_date else ["1.º período", "2.º período"],
+                              horizontal=True)
+        sort_by = "A" if sort_label.startswith("1") else "B"
+        style_label = st.selectbox(
+            "Estilo (2 fechas)",
+            ["Automático", "Barras pareadas", "Barra ancha + barra fina"],
+            help="Automático: barras pareadas hasta ~24 tickers; con más, barra ancha (1.ª serie) "
+                 "+ barra fina (2.ª serie). Con dos series el gráfico siempre es horizontal.",
+        )
+        dual_style = {"Automático": "auto", "Barras pareadas": "paired",
+                      "Barra ancha + barra fina": "bullet"}[style_label]
+
     adjust_ccl = st.checkbox("Ajustar por USD CCL (YPFD.BA/YPF)", False)
 
     orientation_label = st.selectbox(
@@ -699,7 +716,7 @@ elif tool == "Performance":
             # Si performance_plot.py desplegado es una versión anterior a este app.py, avisar en claro
             # (en vez de un TypeError) y no dibujar: un gráfico sin la 2.ª fecha podría publicarse por error.
             import inspect
-            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style"]
+            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style", "compare_periods"]
             _missing = [k for k in _needed if k not in inspect.signature(run_performance).parameters]
             if _missing:
                 st.error(
@@ -721,7 +738,8 @@ elif tool == "Performance":
                 label_a=(label_a or "").strip() or None,
                 label_b=(label_b or "").strip() or None,
                 sort_by=sort_by,
-                dual_style=dual_style
+                dual_style=dual_style,
+                compare_periods=quick_pair
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
