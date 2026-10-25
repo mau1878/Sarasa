@@ -428,7 +428,7 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
             for side in (True, False):
                 members = []
                 if a_ok and (a >= 0) == side:
-                    members.append((a, (f'{a:.1f}%', TICK_COLOR, value_fs)))     # valor de A, más tenue
+                    members.append((a, (f'{a:.1f}%', _lighten(cmap(norm(a)), 0.45), value_fs)))   # valor de A: tono de su barra, aclarado
                 if b_ok and (b >= 0) == side:
                     members.append((b, (f'{b:.1f}%', '#ffffff', value_fs)))      # valor de B, blanco
                 if not members:
