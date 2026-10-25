@@ -613,6 +613,10 @@ elif tool == "Performance":
     # === NEW: Custom start date ===
     use_custom_start = st.checkbox("Usar fecha de inicio personalizada", value=False)
     custom_start_date = None
+    custom_start_date_2 = None
+    label_a = label_b = None
+    sort_by = "A"
+    dual_style = "auto"
     if use_custom_start:
         custom_start_date = st.date_input(
             "Fecha de inicio (baseline para performance)",
@@ -620,6 +624,38 @@ elif tool == "Performance":
             min_value=datetime(1900, 1, 1).date(),
             max_value=datetime.now().date()
         )
+
+        compare_two = st.checkbox(
+            "Comparar con una segunda fecha de inicio",
+            value=False,
+            help="Muestra en el mismo gráfico la performance desde dos fechas de inicio distintas.",
+        )
+        if compare_two:
+            custom_start_date_2 = st.date_input(
+                "Segunda fecha de inicio",
+                value=min(datetime.now().date(), custom_start_date + timedelta(days=3)),
+                min_value=datetime(1900, 1, 1).date(),
+                max_value=datetime.now().date(),
+            )
+            col_a, col_b = st.columns(2)
+            label_a = col_a.text_input(
+                "Nombre de la 1.ª fecha (opcional)", "",
+                placeholder="Ej.: Cierre del viernes previo a la 1.ª vuelta",
+            )
+            label_b = col_b.text_input(
+                "Nombre de la 2.ª fecha (opcional)", "",
+                placeholder="Ej.: Cierre del lunes posterior a la 1.ª vuelta",
+            )
+            sort_label = st.radio("Ordenar por", ["1.ª fecha", "2.ª fecha"], horizontal=True)
+            sort_by = "A" if sort_label == "1.ª fecha" else "B"
+            style_label = st.selectbox(
+                "Estilo (2 fechas)",
+                ["Automático", "Barras pareadas", "Barra ancha + barra fina"],
+                help="Automático: barras pareadas hasta ~24 tickers; con más, barra ancha (1.ª fecha) "
+                     "+ barra fina (2.ª fecha). Con dos fechas el gráfico siempre es horizontal.",
+            )
+            dual_style = {"Automático": "auto", "Barras pareadas": "paired",
+                          "Barra ancha + barra fina": "bullet"}[style_label]
     
     adjust_ccl = st.checkbox("Ajustar por USD CCL (YPFD.BA/YPF)", False)
 
@@ -657,6 +693,8 @@ elif tool == "Performance":
         
         if not tickers:
             st.warning("Elegí un grupo o ingresá al menos un ticker.")
+        elif custom_start_date_2 is not None and custom_start_date_2 == custom_start_date:
+            st.warning("Las dos fechas de inicio son iguales: elegí fechas distintas.")
         else:
             path = run_performance(
                 tickers,
@@ -666,7 +704,12 @@ elif tool == "Performance":
                 ccl_adjust=adjust_ccl,
                 custom_start_date=custom_start_date,  # ← NEW
                 orientation=orientation,
-                subtitle=subtitle.strip() or None
+                subtitle=subtitle.strip() or None,
+                custom_start_date_2=custom_start_date_2,
+                label_a=(label_a or "").strip() or None,
+                label_b=(label_b or "").strip() or None,
+                sort_by=sort_by,
+                dual_style=dual_style
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
