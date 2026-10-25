@@ -420,9 +420,8 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
                 groups.append(dict(y=i - 0.2, positive=a >= 0, anchor=a,
                                    parts=[ticker_part, (f'{a:.1f}%', TEXT_COLOR, value_fs)]))
             if b_ok:
-                parts = [(f'{b:.1f}%', TEXT_COLOR, value_fs)]
-                if not a_ok:   # sin A, el ticker acompaña a B
-                    parts.insert(0, ticker_part)
+                # el ticker también acompaña a B (un poco más tenue), así cada barra se identifica sola
+                parts = [(nm, TICK_COLOR, ticker_fs), (f'{b:.1f}%', TEXT_COLOR, value_fs)]
                 groups.append(dict(y=i + 0.2, positive=b >= 0, anchor=b, parts=parts))
         else:
             ticker_side = (a >= 0) if a_ok else (b >= 0)
@@ -606,8 +605,9 @@ def run_performance(
                                       ascending=False, na_position='last')
         end_str = data.index[-1].strftime('%d/%m/%Y')
         a_str, b_str = firsts[0].strftime('%d/%m/%Y'), firsts[1].strftime('%d/%m/%Y')
-        series_labels = [(label_a or "").strip() or f"Desde {a_str}",
-                         (label_b or "").strip() or f"Desde {b_str}"]
+        # Con nombre propio, la leyenda suma la fecha real del baseline entre paréntesis
+        series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip() else f"Desde {a_str}",
+                         f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip() else f"Desde {b_str}"]
         period_label = f"Periodo: desde {a_str} y desde {b_str} hasta {end_str}"
         return create_dual_bar_plot(
             perf_df,
