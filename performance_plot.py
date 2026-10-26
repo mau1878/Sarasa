@@ -673,7 +673,8 @@ def run_performance(
             series_labels,
             subtitle=subtitle,
             style=dual_style,
-            value_tags=compare_periods if quick else None
+            # abreviatura tras cada valor: el período (rápida) o la fecha corta del baseline (fechas a mano)
+            value_tags=compare_periods if quick else (a_str[:5], b_str[:5])
         )
 
     reference_prices = None
