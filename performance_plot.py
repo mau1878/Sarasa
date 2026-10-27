@@ -70,9 +70,36 @@ def load_ticker_names(json_path):
         print(f"Warning: No se pudo leer nombres del JSON: {e}")
     return mapping
 
+def _fill_trailing_from_close(adj, close):
+    """Yahoo suele tardar en publicar 'Adj Close' del último día (viene vacío) aunque 'Close' ya esté.
+    Completa SOLO las filas posteriores al último 'Adj Close' válido de cada ticker con su 'Close'
+    (no hay dividendos pendientes de ajustar en esos días, así que es equivalente)."""
+    try:
+        adj = adj.to_frame() if isinstance(adj, pd.Series) else adj.copy()
+        close = close.to_frame() if isinstance(close, pd.Series) else close
+        for col in adj.columns:
+            if col not in close.columns:
+                continue
+            last = adj[col].last_valid_index()
+            if last is None:
+                continue
+            mask = (adj.index > last) & adj[col].isna() & close[col].reindex(adj.index).notna()
+            if mask.any():
+                adj.loc[mask, col] = close[col].reindex(adj.index)[mask]
+        return adj
+    except Exception:
+        return adj
+
+
 def fetch_data(tickers, start_date, end_date):
     try:
-        data = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=False)['Adj Close']
+        raw = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=False)
+        data = raw['Adj Close']
+        try:
+            if isinstance(data, pd.DataFrame):   # (con un solo ticker puede venir como Serie: se deja igual)
+                data = _fill_trailing_from_close(data, raw['Close'])
+        except Exception:
+            pass
         if isinstance(data, pd.Series):
             data = data.to_frame()
             data.columns = tickers if isinstance(tickers, list) else [tickers]
@@ -652,7 +679,7 @@ def run_performance(
         perf_df = pd.concat([perfs[0].rename('A'), perfs[1].rename('B')], axis=1)
         perf_df = perf_df.sort_values(by='B' if str(sort_by).upper() == 'B' else 'A',
                                       ascending=False, na_position='last')
-        end_str = data.index[-1].strftime('%d/%m/%Y')
+        end_str = data.dropna(how='all').index[-1].strftime('%d/%m/%Y')
         a_str, b_str = firsts[0].strftime('%d/%m/%Y'), firsts[1].strftime('%d/%m/%Y')
         # Con nombre propio, la leyenda suma la fecha real del baseline entre paréntesis
         if quick:
@@ -689,7 +716,7 @@ def run_performance(
     if performance.empty:
         return None
 
-    last_date_fetched = data.index[-1]
+    last_date_fetched = data.dropna(how='all').index[-1]
     real_end_str = last_date_fetched.strftime('%d/%m/%Y')
 
     if custom_label:
