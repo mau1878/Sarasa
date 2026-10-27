@@ -691,16 +691,20 @@ def run_performance(
                                       ascending=False, na_position='last')
         end_str = data.dropna(how='all').index[-1].strftime('%d/%m/%Y')
         a_str, b_str = firsts[0].strftime('%d/%m/%Y'), firsts[1].strftime('%d/%m/%Y')
+
+        def short(ts):   # dd/mm, y dd/mm/aa si no es del año en curso
+            return ts.strftime('%d/%m') + (ts.strftime('/%y') if ts.year != now.year else '')
+        a_short, b_short = short(firsts[0]), short(firsts[1])
         # Con nombre propio, la leyenda suma la fecha real del baseline entre paréntesis
         if quick:
-            series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip()
+            series_labels = [f"{(label_a or '').strip()} ({a_short})" if (label_a or "").strip()
                              else f"{compare_periods[0]} (base: cierre {a_str})",
-                             f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip()
+                             f"{(label_b or '').strip()} ({b_short})" if (label_b or "").strip()
                              else f"{compare_periods[1]} (base: cierre {b_str})"]
             period_label = f"Periodo: {compare_periods[0]} y {compare_periods[1]} hasta {end_str}"
         else:
-            series_labels = [f"{(label_a or '').strip()} ({a_str[:5]})" if (label_a or "").strip() else f"Desde {a_str}",
-                             f"{(label_b or '').strip()} ({b_str[:5]})" if (label_b or "").strip() else f"Desde {b_str}"]
+            series_labels = [f"{(label_a or '').strip()} ({a_short})" if (label_a or "").strip() else f"Desde {a_str}",
+                             f"{(label_b or '').strip()} ({b_short})" if (label_b or "").strip() else f"Desde {b_str}"]
             period_label = f"Periodo: desde {a_str} y desde {b_str} hasta {end_str}"
         return create_dual_bar_plot(
             perf_df,
@@ -710,8 +714,8 @@ def run_performance(
             series_labels,
             subtitle=subtitle,
             style=dual_style,
-            # abreviatura tras cada valor: el período (rápida) o la fecha corta del baseline (fechas a mano)
-            value_tags=compare_periods if quick else (a_str[:5], b_str[:5])
+            # abreviatura tras cada valor: el período (rápida) o "desde" + fecha corta del baseline (fechas a mano)
+            value_tags=compare_periods if quick else (f"desde {a_short}", f"desde {b_short}")
         )
 
     reference_prices = None
