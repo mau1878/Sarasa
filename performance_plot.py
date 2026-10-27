@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import mtaurus_style  # noqa: F401  (tipografía compartida)
 import matplotlib.colors as mcolors
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
@@ -141,6 +142,15 @@ def calculate_performance(data, reference_prices=None):
     returns = ((last_price - first_price) / first_price) * 100
     return returns.sort_values(ascending=False)
 
+def _new_fig(figsize, facecolor):
+    """Figura con canvas Agg SIEMPRE: el ajuste de etiquetas mide textos con get_renderer(), que solo
+    existe en Agg. Otros backends (p. ej. el de un servidor sin display o el que deja otro módulo)
+    no lo tienen y fallan con AttributeError."""
+    fig, ax = plt.subplots(figsize=figsize, facecolor=facecolor)
+    FigureCanvasAgg(fig)   # reemplaza el canvas de la figura por uno Agg
+    return fig, ax
+
+
 def _prepare_note(subtitle, est_width):
     """Parte el subtítulo opcional en líneas según el ancho estimado de la figura (en pulgadas).
     Devuelve (líneas, alto en puntos, alto extra en pulgadas a reservar arriba del gráfico)."""
@@ -258,7 +268,7 @@ def create_bar_plot(performance, title, period_label, name_mapping,
             label_fs = 14
         ticker_fs = label_fs + TICKER_FONT_BOOST
 
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=PAPER_COLOR)
+    fig, ax = _new_fig((fig_width, fig_height), PAPER_COLOR)
     ax.set_facecolor(BG_COLOR)
     positions = list(range(num_bars))
     values = list(df['Return'])
@@ -412,7 +422,7 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
         ticker_fs = min(18, max(11, 0.62 * pitch_pt))
     value_fs = ticker_fs - TICKER_FONT_BOOST
 
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=PAPER_COLOR)
+    fig, ax = _new_fig((fig_width, fig_height), PAPER_COLOR)
     ax.set_facecolor(BG_COLOR)
 
     # Franjas alternas muy tenues: agrupan visualmente las barras de un mismo ticker
