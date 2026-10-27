@@ -703,9 +703,9 @@ def run_performance(
                              else f"{compare_periods[1]} (base: cierre {b_str})"]
             period_label = f"Periodo: {compare_periods[0]} y {compare_periods[1]} hasta {end_str}"
         else:
-            series_labels = [f"{(label_a or '').strip()} ({a_short})" if (label_a or "").strip() else f"Desde {a_str}",
-                             f"{(label_b or '').strip()} ({b_short})" if (label_b or "").strip() else f"Desde {b_str}"]
-            period_label = f"Periodo: desde {a_str} y desde {b_str} hasta {end_str}"
+            series_labels = [f"{(label_a or '').strip()} ({a_short})" if (label_a or "").strip() else f"Desde el cierre del {a_str}",
+                             f"{(label_b or '').strip()} ({b_short})" if (label_b or "").strip() else f"Desde el cierre del {b_str}"]
+            period_label = f"Periodo: desde el cierre del {a_str} y desde el cierre del {b_str} hasta el cierre del {end_str}"
         return create_dual_bar_plot(
             perf_df,
             f"Performance: {group_name}",
