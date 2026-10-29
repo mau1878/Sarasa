@@ -29,6 +29,7 @@ import numpy as np
 import requests
 import urllib3
 import yfinance as yf
+from merval_msci import empalmar_merval, a_escala_msci
 
 try:
     from num2words import num2words
@@ -261,7 +262,11 @@ def fetch_price_series(ticker, start, end, source='auto'):
     else:
         df = _SOURCES.get(source, _fetch_yfinance)(ticker, start, end)
 
+    if ticker == '^MERV':
+        df = empalmar_merval(df, start, end)  # S&P Merval -> MSCI Merval (desde 17/10/2026)
     df = extender_con_historico_merval(df, ticker, start)
+    if ticker == '^MERV':
+        df = a_escala_msci(df)  # todo ^MERV en escala MSCI (16/10/2026 = 100.000)
     return df
 
 
