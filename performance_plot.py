@@ -1,5 +1,6 @@
 import argparse
 import yfinance as yf
+from merval_msci import yf_download
 import pandas as pd
 import matplotlib.pyplot as plt
 import mtaurus_style  # noqa: F401  (tipografía compartida)
@@ -94,7 +95,7 @@ def _fill_trailing_from_close(adj, close):
 
 def fetch_data(tickers, start_date, end_date):
     try:
-        raw = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=False)
+        raw = yf_download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=False)
         data = raw['Adj Close']
         try:
             if isinstance(data, pd.DataFrame):   # (con un solo ticker puede venir como Serie: se deja igual)
@@ -107,7 +108,7 @@ def fetch_data(tickers, start_date, end_date):
         return apply_dividend_adjustments(data)
     except Exception:
         try:
-            data = yf.download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
+            data = yf_download(tickers, start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
             if isinstance(data, pd.Series):
                 data = data.to_frame()
                 data.columns = tickers if isinstance(tickers, list) else [tickers]

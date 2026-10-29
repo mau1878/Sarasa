@@ -1,5 +1,6 @@
 import argparse
 import yfinance as yf
+from merval_msci import yf_download
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -102,7 +103,7 @@ def find_closest_trading_day(df, target_date):
 
 def fetch_data(tickers, start_date):
     end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
-    data = yf.download(tickers, start=start_date, end=end_date,
+    data = yf_download(tickers, start=start_date, end=end_date,
                        progress=False, auto_adjust=True)['Close']
     if isinstance(data, pd.Series):
         data = data.to_frame()

@@ -1,6 +1,7 @@
 import argparse
 import warnings
 import yfinance as yf
+from merval_msci import yf_download
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -64,7 +65,7 @@ def get_data_and_corr(tickers, start_year=None):
 
     for t in tickers:
         try:
-            df = yf.download(t, start=start_date, end=end_date, auto_adjust=True, progress=False)
+            df = yf_download(t, start=start_date, end=end_date, auto_adjust=True, progress=False)
 
             if isinstance(df.columns, pd.MultiIndex):
                 try:

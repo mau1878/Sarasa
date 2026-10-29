@@ -2,6 +2,7 @@ import streamlit as st
 import plotly.graph_objs as go
 import pandas as pd
 import yfinance as yf
+from merval_msci import yf_download
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
@@ -219,7 +220,7 @@ def load_ratio_pairs():
 
 
 def fetch_data_yf_ratio(ticker, start_date, end_date):
-    data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False, progress=False)
+    data = yf_download(ticker, start=start_date, end=end_date, auto_adjust=False, progress=False)
     if data.empty:
         return pd.DataFrame()
     if isinstance(data.columns, pd.MultiIndex):

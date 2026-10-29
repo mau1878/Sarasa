@@ -1,5 +1,6 @@
 import argparse
 import yfinance as yf
+from merval_msci import yf_download
 import pandas as pd
 import matplotlib.pyplot as plt
 import mtaurus_style  # noqa: F401  (tipografía compartida)
@@ -32,7 +33,7 @@ def fetch_data(ticker, start_year=None):
 
     print(f"Downloading data for {ticker}...")
     try:
-        df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
+        df = yf_download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
 
         # Handle MultiIndex columns if present
         if isinstance(df.columns, pd.MultiIndex):

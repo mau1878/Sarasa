@@ -27,6 +27,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from merval_msci import yf_download
 from scipy.optimize import minimize
 
 from correlation_plot import INVERSE_TICKERS, _order_by_clustering
@@ -67,7 +68,7 @@ def download_prices(tickers, years):
     tickers = tuple(tickers)
     end = datetime.now()
     start = end - timedelta(days=int(years * 365.25) + 7)
-    data = yf.download(list(tickers), start=start, end=end, auto_adjust=True, progress=False, threads=True)
+    data = yf_download(list(tickers), start=start, end=end, auto_adjust=True, progress=False, threads=True)
     if data is None or len(data) == 0:
         return pd.DataFrame()
     close = data['Close'] if 'Close' in data else data

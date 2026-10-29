@@ -189,3 +189,69 @@ def a_escala_msci(df):
     except Exception as e:
         logger.warning(f"a_escala_msci falló: {e}")
         return df
+
+
+# ------------------------------------------------------------------ reemplazo de yf.download
+def _tickers_list(tickers):
+    if isinstance(tickers, str):
+        return [t for t in tickers.replace(",", " ").split() if t]
+    return list(tickers)
+
+
+def yf_download(tickers, *args, **kwargs):
+    """
+    Reemplazo directo de yf.download: igual salida, pero si entre los tickers está
+    ^MERV, esa columna se empalma con el MSCI Merval (y se pasa a escala MSCI si
+    ESCALA_MSCI). Si algo falla, devuelve lo que devolvió yfinance sin tocar.
+    """
+    import yfinance as yf
+    data = yf.download(tickers, *args, **kwargs)
+    try:
+        tl = [t.upper() for t in _tickers_list(tickers)]
+        if "^MERV" not in tl or data is None or data.empty:
+            return data
+        return _patch_download(data, tl, kwargs.get("start"), kwargs.get("end"))
+    except Exception as e:
+        logger.warning(f"yf_download: no se pudo empalmar ^MERV ({e})")
+        return data
+
+
+def _patch_download(data, tl, start, end):
+    multi = isinstance(data.columns, pd.MultiIndex)
+    idx = pd.to_datetime(data.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    data = data.copy()
+    data.index = idx.normalize()
+
+    if multi:
+        fields = [f for f in data.columns.get_level_values(0).unique()
+                  if (f, "^MERV") in data.columns]
+        get = lambda f: data[(f, "^MERV")]
+    else:  # un solo ticker, columnas planas
+        fields = [f for f in data.columns]
+        get = lambda f: data[f]
+    price_f = next((f for f in ("Close", "Adj Close") if f in fields), None)
+    if price_f is None:
+        return data
+
+    base = get(price_f).dropna().to_frame("Close")
+    base.index.name = "Date"
+    end_incl = None if end is None else pd.Timestamp(end) - pd.Timedelta(days=1)  # yfinance: end exclusivo
+    emp = empalmar_merval(base, start, end_incl)
+    if emp is base or emp is None or len(emp) == 0:
+        return data
+    emp = a_escala_msci(emp)["Close"]
+    k = _K["v"] if ESCALA_MSCI else None
+
+    new_index = data.index.union(emp.index).sort_values()
+    data = data.reindex(new_index)
+    for f in fields:
+        col = ("%s" % f, "^MERV") if multi else f
+        if f in ("Close", "Adj Close"):
+            data[col] = emp.reindex(new_index)
+        elif f in ("Open", "High", "Low") and k:
+            vals = data[col].copy()
+            vals[vals.index > ANCHOR] = float("nan")  # no hay OHL diario para el tramo nuevo
+            data[col] = vals / k
+    return data

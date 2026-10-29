@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import mtaurus_style  # noqa: F401  (tipografía compartida)
 import yfinance as yf
+from merval_msci import yf_download
 import os
 import requests
 import sys
@@ -13,7 +14,7 @@ from datetime import datetime, timedelta
 
 def fetch_data_yfinance(ticker, start_date, end_date):
     try:
-        data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False, progress=False)
+        data = yf_download(ticker, start=start_date, end=end_date, auto_adjust=False, progress=False)
         if data.empty: return pd.DataFrame()
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
