@@ -687,8 +687,8 @@ elif tool == "Performance":
     col_two, col_sym = st.columns(2)
     two_columns = col_two.checkbox(
         "Dos columnas (perdedores | ganadores)", False,
-        help="Perdedores a la izquierda y ganadores a la derecha, con la misma escala. Solo con orientación "
-             "Automática u Horizontal y una sola fecha de inicio.",
+        help="Perdedores a la izquierda y ganadores a la derecha, con la misma escala; el eje del cero se corre "
+             "según los extremos de cada lado. Solo con orientación Automática u Horizontal y una sola fecha de inicio.",
     )
     symlog = col_sym.checkbox(
         "Escala symlog (comprime extremos)", False,
