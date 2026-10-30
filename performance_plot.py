@@ -221,6 +221,14 @@ def _symlog_linthresh(values):
     return thr if a.max() > 2 * thr else None
 
 
+def _tick_decimals(ticks):
+    """Menor cantidad de decimales (0-2) con la que todas las marcas se leen exactas: así '1.5' no pasa por '2'."""
+    for d in (0, 1, 2):
+        if all(abs(t - round(t, d)) < 1e-9 for t in ticks):
+            return d
+    return 2
+
+
 def _symlog_ticks(lo, hi, thr):
     """Marcas 1-2-5 dentro de [lo, hi] para un eje symlog (más el 0), sin amontonar las de la zona lineal."""
     big = max(abs(lo), abs(hi))
@@ -288,9 +296,10 @@ def _stack_labels(fig, pairs):
 
 def create_split_bar_plot(df, title, period_label, filename="performance_chart.png",
                           subtitle=None, symlog=False):
-    """Barras horizontales en dos columnas: perdedores a la izquierda, ganadores a la derecha.
-    Ambas columnas comparten ESCALA (mismo ancho y mismos límites): una barra de 2% mide lo mismo
-    de los dos lados. df: columnas 'Return' y 'Display Name' (con retornos de ambos signos)."""
+    """Barras horizontales con perdedores y ganadores lado a lado, en UN solo eje: misma escala para
+    todo (una barra de 2% mide lo mismo a izquierda y derecha) y el cero queda corrido hacia donde
+    haya más rango, así no se dibujan valores que ningún ticker alcanza. Las filas se leen de arriba
+    hacia abajo: lo más extremo de cada lado arriba. df: columnas 'Return' y 'Display Name'."""
     neg = df[df['Return'] < 0].sort_values('Return')                     # peor arriba
     pos = df[df['Return'] >= 0].sort_values('Return', ascending=False)   # mejor arriba
     n_rows = max(len(neg), len(pos))
@@ -303,31 +312,25 @@ def create_split_bar_plot(df, title, period_label, filename="performance_chart.p
     fig_width = 14
     note_lines, note_h_pt, note_extra_in = _prepare_note(subtitle, fig_width)
     fig_height = min(20, max(7, 2.3 + 0.30 * n_rows))
-    top_in, bottom_in, left_in, right_in, gap_in = 1.35 + note_extra_in, 0.95, 0.35, 0.30, 0.10
+    top_in, bottom_in, left_in, right_in = 1.35 + note_extra_in, 0.95, 0.35, 0.30
     pitch_pt = (fig_height - top_in - bottom_in) * 72 / n_rows
     ticker_fs = min(18, max(11, 0.62 * pitch_pt))
     label_fs = ticker_fs - TICKER_FONT_BOOST
 
-    fig, ax_n = _new_fig((fig_width, fig_height), PAPER_COLOR)
-    col_w = (fig_width - left_in - right_in - gap_in) / 2
-    b, h, w = bottom_in / fig_height, (fig_height - top_in - bottom_in) / fig_height, col_w / fig_width
-    x_n, x_p = left_in / fig_width, (left_in + col_w + gap_in) / fig_width
-    ax_n.set_position([x_n, b, w, h])
-    ax_p = fig.add_axes([x_p, b, w, h])
-    ax_h = fig.add_axes([x_n, b, x_p + w - x_n, h])   # eje invisible a lo ancho: título, eje x y marca de agua
-    ax_h.axis('off')
+    fig, ax = _new_fig((fig_width, fig_height), PAPER_COLOR)
+    ax.set_facecolor(BG_COLOR)
+    for i in range(0, n_rows, 2):
+        ax.axhspan(i - 0.5, i + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
 
-    def draw(ax, sub, positive):
-        ax.set_facecolor(BG_COLOR)
+    pairs, values = [], []
+    for sub in (neg, pos):
         vals = list(sub['Return'])
         idx = list(range(len(sub)))
-        for i in range(0, n_rows, 2):
-            ax.axhspan(i - 0.5, i + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
         ax.barh(idx, vals, color=[cmap(norm(v)) for v in vals], height=0.78, zorder=3)
-        if thr:
+        if thr and not ax.get_xscale() == 'symlog':
             ax.set_xscale('symlog', linthresh=thr, linscale=1)
-        pairs = []
         for i, name, value in zip(idx, sub['Display Name'], vals):
+            positive = value >= 0
             inside = bool(thr) and abs(value) > 2 * thr   # outlier en la zona log: etiqueta dentro de la barra
             right = (not positive) if inside else positive
             common = dict(xy=(value, i), ha='left' if right else 'right', va='center', rotation=0,
@@ -335,49 +338,35 @@ def create_split_bar_plot(df, title, period_label, filename="performance_chart.p
                           fontweight='bold', zorder=5, annotation_clip=False)
             pairs.append((ax.annotate(name, fontsize=ticker_fs, **common),
                           ax.annotate(f'{value:.1f}%', fontsize=label_fs, **common), right))
-        ax.set_axisbelow(True)
-        ax.grid(True, axis='x', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
-        ax.set_ylim(n_rows - 0.3, -0.7)   # invertido: arriba lo más extremo de cada lado
-        ax.set_yticks([])
-        ax.tick_params(axis='x', colors=TICK_COLOR, labelsize=14)
-        ax.spines[['top', 'right', 'left']].set_visible(False)
-        ax.spines['bottom'].set_color(TEXT_COLOR)
-        ax.spines['bottom'].set_linewidth(0.8)
-        return pairs
+            values.append(value)
 
-    pairs_n, pairs_p = draw(ax_n, neg, False), draw(ax_p, pos, True)
-    _stack_labels(fig, pairs_n + pairs_p)
+    ax.axvline(0, color=ZERO_LINE_COLOR, linewidth=1.5, alpha=0.8, linestyle='--', zorder=4)
+    ax.set_axisbelow(True)
+    ax.grid(True, axis='x', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
+    ax.set_ylim(n_rows - 0.3, -0.7)   # invertido: arriba lo más extremo de cada lado
+    ax.set_yticks([])
+    ax.set_xlabel("Retorno (%)", fontsize=14, color=TEXT_COLOR, labelpad=10)
+    ax.tick_params(axis='x', colors=TICK_COLOR, labelsize=14)
+    ax.spines[['top', 'right', 'left']].set_visible(False)
+    ax.spines['bottom'].set_color(TEXT_COLOR)
+    ax.spines['bottom'].set_linewidth(0.8)
+    fig.subplots_adjust(left=left_in / fig_width, right=1 - right_in / fig_width,
+                        top=1 - top_in / fig_height, bottom=bottom_in / fig_height)
 
-    # Límites que dejan entrar las etiquetas; después los dos lados se igualan (misma escala)
+    _stack_labels(fig, pairs)
     if thr:
-        lim = max(-_symlog_fit(ax_n, pairs_n, list(neg['Return']), True)[0],
-                  _symlog_fit(ax_p, pairs_p, list(pos['Return']), True)[1])
+        lo, hi = _symlog_fit(ax, pairs, values, True)
+        ax.set_xlim(lo, hi)
+        _apply_symlog_ticks(ax, True, thr)
     else:
-        _fit_value_limits(fig, ax_n, [(a, p) for t, v, p in pairs_n for a in (t, v)], neg['Return'].min(), 0, True)
-        _fit_value_limits(fig, ax_p, [(a, p) for t, v, p in pairs_p for a in (t, v)], 0, max(pos['Return'].max(), 0.01), True)
-        lim = max(-ax_n.get_xlim()[0], ax_p.get_xlim()[1])
-    ax_n.set_xlim(-lim, 0)
-    ax_p.set_xlim(0, lim)
+        _fit_value_limits(fig, ax, [(a, pr) for t, v, pr in pairs for a in (t, v)], vmin, vmax, True)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=8, steps=[1, 2, 5, 10]))   # marcas 1-2-5: decimales exactos
+    dec = _tick_decimals(ax.get_xticks())
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.{dec}f}%'))
 
-    dec = 0 if lim >= 5 else 1
-    ax_n.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: '' if abs(x) < 1e-9 else f'{x:.{dec}f}%'))
-    ax_p.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.{dec}f}%'))
-    if thr:
-        _apply_symlog_ticks(ax_n, True, thr)
-        _apply_symlog_ticks(ax_p, True, thr)
-    else:
-        ax_n.xaxis.set_major_locator(MaxNLocator(nbins=5))
-        ax_p.xaxis.set_major_locator(MaxNLocator(nbins=5))
-
-    # Línea del cero: una sola, en el centro del hueco entre las dos columnas
-    ax_h.plot([0.5, 0.5], [0, 1], transform=ax_h.transAxes, color=ZERO_LINE_COLOR, linewidth=1.5,
-              alpha=0.8, linestyle='--', zorder=4, clip_on=False)
-    _draw_header(ax_h, title, period_label, note_lines, note_h_pt)
-    ax_h.annotate("Retorno (%)", xy=(0.5, 0), xycoords='axes fraction', xytext=(0, -46),
-                  textcoords='offset points', ha='center', va='top', fontsize=14, color=TEXT_COLOR,
-                  annotation_clip=False)
-    ax_h.text(0.5, 0.5, '@MTaurus_ok', transform=ax_h.transAxes, fontsize=70, color=WATERMARK_COLOR,
-              ha='center', va='center', rotation=30, zorder=999)
+    _draw_header(ax, title, period_label, note_lines, note_h_pt)
+    ax.text(0.5, 0.5, '@MTaurus_ok', transform=ax.transAxes, fontsize=70, color=WATERMARK_COLOR,
+            ha='center', va='center', rotation=30, zorder=999)
 
     output_path = os.path.abspath(filename)
     fig.savefig(output_path, dpi=180, bbox_inches='tight', facecolor=PAPER_COLOR)
@@ -398,7 +387,8 @@ def create_bar_plot(performance, title, period_label, name_mapping,
     subtitle: aclaración opcional (texto libre) que se muestra bajo la línea del periodo.
       Se ajusta sola al ancho del gráfico; con "\n" se fuerzan saltos de línea.
 
-    two_columns: perdedores a la izquierda y ganadores a la derecha (misma escala). Solo con orientación
+    two_columns: perdedores a la izquierda y ganadores a la derecha, con la misma escala y el cero corrido
+      según los extremos de cada lado (sin espacio vacío). Solo con orientación
       'auto' u 'horizontal' y cuando hay retornos de ambos signos; si no, se ignora.
     symlog: escala lineal para el grueso de las barras y logarítmica para los extremos, así un outlier
       (p. ej. -24%) no aplasta al resto. Se ignora si no hay extremos que comprimir.
