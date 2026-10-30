@@ -8,6 +8,7 @@ import matplotlib.colors as mcolors
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator, NullLocator
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 import sys
 import os
@@ -30,6 +31,7 @@ NOTE_FONT_SIZE = 13     # tamaño del subtítulo/aclaración opcional
 AUTO_HORIZONTAL_MAX = 35  # orientation='auto': horizontal hasta esta cantidad de barras, vertical por encima
 AUTO_DUAL_PAIRED_MAX = 24  # 2 fechas de inicio: barras pareadas hasta esta cantidad de tickers; por encima, barra ancha + fina
 LEGEND_FONT_SIZE = 14      # tamaño de la leyenda (2 fechas de inicio)
+SYMLOG_QUANTILE = 0.75     # escala symlog: el cuantil de |retorno| que queda en la zona lineal (el resto se comprime)
 plt.style.use('dark_background')
 
 # ==================== DIVIDENDS ADJUSTMENTS ====================
@@ -208,8 +210,184 @@ def _fit_value_limits(fig, ax, items, vmin, vmax, horizontal):
         set_value_lim(lo - span * 0.02, hi + span * 0.02)
 
 
+def _symlog_linthresh(values):
+    """Umbral de la zona lineal de la escala symlog: el cuantil SYMLOG_QUANTILE de |retorno| (1 cifra),
+    así el grueso de las barras queda en escala lineal y solo los extremos se comprimen.
+    Devuelve None si no hay extremos que comprimir (en ese caso symlog no aporta nada)."""
+    a = pd.Series(values, dtype=float).abs().dropna()
+    if a.empty:
+        return None
+    thr = float(f"{max(a.quantile(SYMLOG_QUANTILE), 0.5):.1g}")
+    return thr if a.max() > 2 * thr else None
+
+
+def _symlog_ticks(lo, hi, thr):
+    """Marcas 1-2-5 dentro de [lo, hi] para un eje symlog (más el 0), sin amontonar las de la zona lineal."""
+    big = max(abs(lo), abs(hi))
+    ticks = {0.0}
+    for exp in range(-1, 4):
+        for m in (1, 2, 5):
+            t = m * 10.0 ** exp
+            if thr / 5 <= t <= big:
+                for v in (t, -t):
+                    if lo <= v <= hi:
+                        ticks.add(v)
+    return sorted(ticks)
+
+
+def _apply_symlog_ticks(ax, horizontal, thr):
+    lo, hi = ax.get_xlim() if horizontal else ax.get_ylim()
+    (ax.set_xticks if horizontal else ax.set_yticks)(_symlog_ticks(lo, hi, thr))
+    (ax.xaxis if horizontal else ax.yaxis).set_minor_locator(NullLocator())
+
+
+def _symlog_fit(ax, pairs, values, horizontal):
+    """Límites (lo, hi) de un eje symlog en los que entran todas las etiquetas.
+    En escala logarítmica el método iterativo de _fit_value_limits diverge (al ampliar el eje cada etiqueta
+    ocupa más décadas), así que se resuelve en el espacio transformado: el ancho de cada etiqueta es
+    constante en píxeles, y la barra tiene que terminar a (1 - fracción de etiqueta) del borde del eje."""
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    axis = ax.xaxis if horizontal else ax.yaxis
+    tr = axis.get_transform()
+    size = ax.bbox.width if horizontal else ax.bbox.height
+    need = []   # (barra en espacio transformado, fracción del eje que ocupa su etiqueta)
+    for (t_ann, v_ann, positive), v in zip(pairs, values):
+        outer = v_ann if positive else t_ann          # la etiqueta más lejos de la barra
+        bb = outer.get_window_extent(renderer)
+        bar_px = ax.transData.transform((v, 0) if horizontal else (0, v))[0 if horizontal else 1]
+        edge = (bb.x1 if positive else bb.x0) if horizontal else (bb.y1 if positive else bb.y0)
+        inside = positive != (v >= 0)     # la etiqueta se extiende hacia adentro de su barra (outlier)
+        need.append((float(tr.transform(v)), 0.0 if inside else min(abs(edge - bar_px) / size, 0.9)))
+    t_pos = max([t for t, _ in need if t >= 0] + [0.0])
+    t_neg = max([-t for t, _ in need if t < 0] + [0.0])
+    for _ in range(40):   # punto fijo: converge porque cada fracción es chica
+        for t, f in need:
+            if t >= 0:
+                t_pos = max(t_pos, (t + t_neg) / (1 - f) - t_neg)
+            else:
+                t_neg = max(t_neg, (-t + t_pos) / (1 - f) - t_pos)
+    inv = tr.inverted()
+    lo = float(inv.transform(-t_neg * 1.02)) if t_neg else 0.0
+    hi = float(inv.transform(t_pos * 1.02)) if t_pos else 0.0
+    return lo, hi
+
+
+def _stack_labels(fig, pairs):
+    """Apila ticker y valor (horizontal) según el largo real de cada texto, en puntos."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    px_to_pt = 72.0 / fig.dpi
+    for t_ann, v_ann, positive in pairs:
+        if positive:   # ticker junto a la barra, valor más afuera
+            v_ann.xyann = (4 + t_ann.get_window_extent(renderer).width * px_to_pt + LABEL_GAP_PT, 0)
+        else:          # valor junto a la barra, ticker más afuera
+            t_ann.xyann = (-(4 + v_ann.get_window_extent(renderer).width * px_to_pt + LABEL_GAP_PT), 0)
+
+
+def create_split_bar_plot(df, title, period_label, filename="performance_chart.png",
+                          subtitle=None, symlog=False):
+    """Barras horizontales en dos columnas: perdedores a la izquierda, ganadores a la derecha.
+    Ambas columnas comparten ESCALA (mismo ancho y mismos límites): una barra de 2% mide lo mismo
+    de los dos lados. df: columnas 'Return' y 'Display Name' (con retornos de ambos signos)."""
+    neg = df[df['Return'] < 0].sort_values('Return')                     # peor arriba
+    pos = df[df['Return'] >= 0].sort_values('Return', ascending=False)   # mejor arriba
+    n_rows = max(len(neg), len(pos))
+    thr = _symlog_linthresh(df['Return']) if symlog else None
+
+    cmap = LinearSegmentedColormap.from_list("custom_div_dark", DIV_COLORS, N=256)
+    vmin, vmax = min(df['Return'].min(), -0.01), max(df['Return'].max(), 0.01)
+    norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+
+    fig_width = 14
+    note_lines, note_h_pt, note_extra_in = _prepare_note(subtitle, fig_width)
+    fig_height = min(20, max(7, 2.3 + 0.30 * n_rows))
+    top_in, bottom_in, left_in, right_in, gap_in = 1.35 + note_extra_in, 0.95, 0.35, 0.30, 0.10
+    pitch_pt = (fig_height - top_in - bottom_in) * 72 / n_rows
+    ticker_fs = min(18, max(11, 0.62 * pitch_pt))
+    label_fs = ticker_fs - TICKER_FONT_BOOST
+
+    fig, ax_n = _new_fig((fig_width, fig_height), PAPER_COLOR)
+    col_w = (fig_width - left_in - right_in - gap_in) / 2
+    b, h, w = bottom_in / fig_height, (fig_height - top_in - bottom_in) / fig_height, col_w / fig_width
+    x_n, x_p = left_in / fig_width, (left_in + col_w + gap_in) / fig_width
+    ax_n.set_position([x_n, b, w, h])
+    ax_p = fig.add_axes([x_p, b, w, h])
+    ax_h = fig.add_axes([x_n, b, x_p + w - x_n, h])   # eje invisible a lo ancho: título, eje x y marca de agua
+    ax_h.axis('off')
+
+    def draw(ax, sub, positive):
+        ax.set_facecolor(BG_COLOR)
+        vals = list(sub['Return'])
+        idx = list(range(len(sub)))
+        for i in range(0, n_rows, 2):
+            ax.axhspan(i - 0.5, i + 0.5, color=TICK_COLOR, alpha=0.04, linewidth=0, zorder=0)
+        ax.barh(idx, vals, color=[cmap(norm(v)) for v in vals], height=0.78, zorder=3)
+        if thr:
+            ax.set_xscale('symlog', linthresh=thr, linscale=1)
+        pairs = []
+        for i, name, value in zip(idx, sub['Display Name'], vals):
+            inside = bool(thr) and abs(value) > 2 * thr   # outlier en la zona log: etiqueta dentro de la barra
+            right = (not positive) if inside else positive
+            common = dict(xy=(value, i), ha='left' if right else 'right', va='center', rotation=0,
+                          textcoords='offset points', xytext=(4 if right else -4, 0), color=TEXT_COLOR,
+                          fontweight='bold', zorder=5, annotation_clip=False)
+            pairs.append((ax.annotate(name, fontsize=ticker_fs, **common),
+                          ax.annotate(f'{value:.1f}%', fontsize=label_fs, **common), right))
+        ax.set_axisbelow(True)
+        ax.grid(True, axis='x', color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
+        ax.set_ylim(n_rows - 0.3, -0.7)   # invertido: arriba lo más extremo de cada lado
+        ax.set_yticks([])
+        ax.tick_params(axis='x', colors=TICK_COLOR, labelsize=14)
+        ax.spines[['top', 'right', 'left']].set_visible(False)
+        ax.spines['bottom'].set_color(TEXT_COLOR)
+        ax.spines['bottom'].set_linewidth(0.8)
+        return pairs
+
+    pairs_n, pairs_p = draw(ax_n, neg, False), draw(ax_p, pos, True)
+    _stack_labels(fig, pairs_n + pairs_p)
+
+    # Límites que dejan entrar las etiquetas; después los dos lados se igualan (misma escala)
+    if thr:
+        lim = max(-_symlog_fit(ax_n, pairs_n, list(neg['Return']), True)[0],
+                  _symlog_fit(ax_p, pairs_p, list(pos['Return']), True)[1])
+    else:
+        _fit_value_limits(fig, ax_n, [(a, p) for t, v, p in pairs_n for a in (t, v)], neg['Return'].min(), 0, True)
+        _fit_value_limits(fig, ax_p, [(a, p) for t, v, p in pairs_p for a in (t, v)], 0, max(pos['Return'].max(), 0.01), True)
+        lim = max(-ax_n.get_xlim()[0], ax_p.get_xlim()[1])
+    ax_n.set_xlim(-lim, 0)
+    ax_p.set_xlim(0, lim)
+
+    dec = 0 if lim >= 5 else 1
+    ax_n.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: '' if abs(x) < 1e-9 else f'{x:.{dec}f}%'))
+    ax_p.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.{dec}f}%'))
+    if thr:
+        _apply_symlog_ticks(ax_n, True, thr)
+        _apply_symlog_ticks(ax_p, True, thr)
+    else:
+        ax_n.xaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax_p.xaxis.set_major_locator(MaxNLocator(nbins=5))
+
+    # Línea del cero: una sola, en el centro del hueco entre las dos columnas
+    ax_h.plot([0.5, 0.5], [0, 1], transform=ax_h.transAxes, color=ZERO_LINE_COLOR, linewidth=1.5,
+              alpha=0.8, linestyle='--', zorder=4, clip_on=False)
+    _draw_header(ax_h, title, period_label, note_lines, note_h_pt)
+    ax_h.annotate("Retorno (%)", xy=(0.5, 0), xycoords='axes fraction', xytext=(0, -46),
+                  textcoords='offset points', ha='center', va='top', fontsize=14, color=TEXT_COLOR,
+                  annotation_clip=False)
+    ax_h.text(0.5, 0.5, '@MTaurus_ok', transform=ax_h.transAxes, fontsize=70, color=WATERMARK_COLOR,
+              ha='center', va='center', rotation=30, zorder=999)
+
+    output_path = os.path.abspath(filename)
+    fig.savefig(output_path, dpi=180, bbox_inches='tight', facecolor=PAPER_COLOR)
+    plt.close(fig)
+    return output_path
+
+
 def create_bar_plot(performance, title, period_label, name_mapping,
-                    filename="performance_chart.png", orientation="auto", subtitle=None):
+                    filename="performance_chart.png", orientation="auto", subtitle=None,
+                    two_columns=False, symlog=False):
     """Gráfico de barras de performance.
 
     orientation:
@@ -219,6 +397,11 @@ def create_bar_plot(performance, title, period_label, name_mapping,
 
     subtitle: aclaración opcional (texto libre) que se muestra bajo la línea del periodo.
       Se ajusta sola al ancho del gráfico; con "\n" se fuerzan saltos de línea.
+
+    two_columns: perdedores a la izquierda y ganadores a la derecha (misma escala). Solo con orientación
+      'auto' u 'horizontal' y cuando hay retornos de ambos signos; si no, se ignora.
+    symlog: escala lineal para el grueso de las barras y logarítmica para los extremos, así un outlier
+      (p. ej. -24%) no aplasta al resto. Se ignora si no hay extremos que comprimir.
     """
     if performance.empty:
         return None
@@ -227,6 +410,11 @@ def create_bar_plot(performance, title, period_label, name_mapping,
     df['Display Name'] = [
         " ".join(str(name_mapping.get(t, t)).split()) for t in df.index
     ]
+
+    if (two_columns and orientation in ("auto", "horizontal")
+            and (df['Return'] < 0).any() and (df['Return'] >= 0).any()):
+        return create_split_bar_plot(df, title, period_label, filename=filename,
+                                     subtitle=subtitle, symlog=symlog)
 
     # Mismo divergente apagado del heatmap: rojo - gris azulado - verde
     cmap = LinearSegmentedColormap.from_list("custom_div_dark", DIV_COLORS, N=256)
@@ -284,6 +472,10 @@ def create_bar_plot(performance, title, period_label, name_mapping,
     else:
         ax.bar(positions, values, color=palette_colors, width=0.8, zorder=3)
 
+    thr = _symlog_linthresh(values) if symlog else None
+    if thr:
+        (ax.set_xscale if horizontal else ax.set_yscale)('symlog', linthresh=thr, linscale=1)
+
     # ---------- Etiquetas pegadas al extremo de cada barra ----------
     # Vertical: arriba si >=0, abajo si <0, rotadas. Horizontal: a la derecha si >=0, a la izquierda si <0.
     # El ticker va más grande que el valor; se lee "TICKER  valor%".
@@ -292,11 +484,17 @@ def create_bar_plot(performance, title, period_label, name_mapping,
         positive = value >= 0
         sign = 1 if positive else -1
         if horizontal:
-            common = dict(xy=(value, i), ha='left' if positive else 'right', va='center', rotation=0)
-            start = (4 * sign, 0)
+            inside = bool(thr) and abs(value) > 2 * thr   # outlier en la zona log: la etiqueta va dentro de la barra
+            right = (not positive) if inside else positive
+            common = dict(xy=(value, i), ha='left' if right else 'right', va='center', rotation=0)
+            start = (4 if right else -4, 0)
+            positive = right   # sentido en que se extiende la etiqueta (lo que usan el apilado y el ajuste)
         else:
-            common = dict(xy=(i, value), ha='center', va='bottom' if positive else 'top', rotation=90)
-            start = (0, 4 * sign)
+            inside = bool(thr) and abs(value) > 2 * thr   # outlier en la zona log: la etiqueta va dentro de la barra
+            up = (not positive) if inside else positive
+            common = dict(xy=(i, value), ha='center', va='bottom' if up else 'top', rotation=90)
+            start = (0, 4 if up else -4)
+            positive = up   # sentido en que se extiende la etiqueta (lo que usan el apilado y el ajuste)
         common.update(textcoords='offset points', color=TEXT_COLOR, fontweight='bold',
                       zorder=5, annotation_clip=False)
         t_ann = ax.annotate(name, xytext=start, fontsize=ticker_fs, **common)
@@ -364,7 +562,12 @@ def create_bar_plot(performance, title, period_label, name_mapping,
             t_ann.xyann = _offset(-(4 + _along(v_ann) + LABEL_GAP_PT))
 
     # 2) Ampliar los límites del eje de valores hasta que entren todas las etiquetas
-    _fit_value_limits(fig, ax, [(a, pos) for t, v, pos in pairs for a in (t, v)], vmin, vmax, horizontal)
+    if thr:
+        lo, hi = _symlog_fit(ax, pairs, values, horizontal)
+        (ax.set_xlim if horizontal else ax.set_ylim)(lo, hi)
+        _apply_symlog_ticks(ax, horizontal, thr)
+    else:
+        _fit_value_limits(fig, ax, [(a, pos) for t, v, pos in pairs for a in (t, v)], vmin, vmax, horizontal)
 
     output_path = os.path.abspath(filename)
     plt.savefig(output_path, dpi=180, bbox_inches='tight', facecolor=PAPER_COLOR)
@@ -610,7 +813,9 @@ def run_performance(
     label_b=None,            # nombre opcional de la 2.ª fecha en la leyenda (solo con 2 fechas)
     sort_by="A",             # 'A' | 'B': por qué fecha se ordenan los tickers (solo con 2 fechas)
     dual_style="auto",       # 'auto' | 'paired' | 'bullet' (solo con 2 fechas)
-    compare_periods=None     # ('YTD','MTD'): compara dos períodos predefinidos (sin fechas a mano)
+    compare_periods=None,    # ('YTD','MTD'): compara dos períodos predefinidos (sin fechas a mano)
+    two_columns=False,       # perdedores | ganadores en dos columnas (solo con una fecha de inicio)
+    symlog=False             # escala symlog: comprime los extremos (solo con una fecha de inicio)
 ):
     name_mapping = load_ticker_names(tickers_file) if tickers_file else {}
 
@@ -749,7 +954,9 @@ def run_performance(
         period_label,
         name_mapping,
         orientation=orientation,
-        subtitle=subtitle
+        subtitle=subtitle,
+        two_columns=two_columns,
+        symlog=symlog
     )
     return path
 
@@ -763,6 +970,8 @@ def main():
     parser.add_argument('--ccl_adjust', action='store_true')
     parser.add_argument('--orientation', choices=['auto', 'horizontal', 'vertical'], default='auto')
     parser.add_argument('--subtitle', type=str, default=None, help='Aclaración opcional bajo el periodo')
+    parser.add_argument('--two_columns', action='store_true', help='Perdedores | ganadores en dos columnas')
+    parser.add_argument('--symlog', action='store_true', help='Escala symlog (comprime los extremos)')
     args = parser.parse_args()
     # main() is kept for backward CLI compatibility (no custom date here)
     path = run_performance(
@@ -772,7 +981,9 @@ def main():
         tickers_file=args.tickers_file,
         ccl_adjust=args.ccl_adjust,
         orientation=args.orientation,
-        subtitle=args.subtitle
+        subtitle=args.subtitle,
+        two_columns=args.two_columns,
+        symlog=args.symlog
     )
     if path:
         print(path)

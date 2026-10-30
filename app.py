@@ -684,6 +684,18 @@ elif tool == "Performance":
     )
     orientation = {"Automática": "auto", "Horizontal": "horizontal", "Vertical": "vertical"}[orientation_label]
 
+    col_two, col_sym = st.columns(2)
+    two_columns = col_two.checkbox(
+        "Dos columnas (perdedores | ganadores)", False,
+        help="Perdedores a la izquierda y ganadores a la derecha, con la misma escala. Solo con orientación "
+             "Automática u Horizontal y una sola fecha de inicio.",
+    )
+    symlog = col_sym.checkbox(
+        "Escala symlog (comprime extremos)", False,
+        help="Escala lineal para el grueso de las barras y logarítmica para los extremos: un outlier no aplasta "
+             "al resto. Solo con una sola fecha de inicio.",
+    )
+
     subtitle = st.text_area(
         "Subtítulo / aclaración (opcional)",
         "",
@@ -717,7 +729,7 @@ elif tool == "Performance":
             # Si performance_plot.py desplegado es una versión anterior a este app.py, avisar en claro
             # (en vez de un TypeError) y no dibujar: un gráfico sin la 2.ª fecha podría publicarse por error.
             import inspect
-            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style", "compare_periods"]
+            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style", "compare_periods", "two_columns", "symlog"]
             _missing = [k for k in _needed if k not in inspect.signature(run_performance).parameters]
             if _missing:
                 st.error(
@@ -740,7 +752,9 @@ elif tool == "Performance":
                 label_b=(label_b or "").strip() or None,
                 sort_by=sort_by,
                 dual_style=dual_style,
-                compare_periods=quick_pair
+                compare_periods=quick_pair,
+                two_columns=two_columns,
+                symlog=symlog
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
