@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import hsv_to_rgb, to_rgb, to_hex
 from datetime import datetime, timedelta, time as dtime
-from scipy.interpolate import make_interp_spline
+from scipy.interpolate import PchipInterpolator
 from adjustText import adjust_text
 from functools import lru_cache
 import os
@@ -334,7 +334,7 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
         if smooth and n_points > 4:
             try:
-                spline = make_interp_spline(x_numeric, y, k=2)
+                spline = PchipInterpolator(x_numeric, y)
                 x_s = np.linspace(0, n_points - 1, 400)
                 y_s = spline(x_s)
                 ax.plot(x_s, y_s, color=color, linewidth=2.2, alpha=0.9)
@@ -468,7 +468,7 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
 
         if smooth and n_points > 4:
             try:
-                spline = make_interp_spline(x_numeric, y, k=2)
+                spline = PchipInterpolator(x_numeric, y)
                 x_s = np.linspace(0, n_points - 1, 400)
                 y_s = spline(x_s)
                 ax.plot(x_s, y_s, color=color, linewidth=2.2, alpha=0.9, zorder=4)
