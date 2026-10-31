@@ -72,6 +72,48 @@
         "CORN",
         "SOYB"
     ],
+    "Sectores S&P 500 (SPDR)": {
+        "XLK": "XLK (Tecnología)",
+        "XLC": "XLC (Comunicaciones)",
+        "XLY": "XLY (Consumo Discrecional)",
+        "XLP": "XLP (Consumo Básico)",
+        "XLF": "XLF (Financiero)",
+        "XLV": "XLV (Salud)",
+        "XLI": "XLI (Industriales)",
+        "XLE": "XLE (Energía)",
+        "XLB": "XLB (Materiales)",
+        "XLU": "XLU (Utilities)",
+        "XLRE": "XLRE (Real Estate)"
+    },
+    "Software, Cloud e IA": {
+        "MSFT": "MSFT",
+        "ORCL": "ORCL",
+        "CRM": "CRM",
+        "NOW": "NOW",
+        "ADBE": "ADBE",
+        "SNOW": "SNOW",
+        "PLTR": "PLTR",
+        "SHOP": "SHOP",
+        "DOCU": "DOCU",
+        "TWLO": "TWLO",
+        "NVDA": "NVDA",
+        "AVGO": "AVGO",
+        "TSM": "TSM",
+        "MU": "MU"
+    },
+    "Ejes del Mercado": {
+        "SPY": "SPY (S&P 500)",
+        "IWM": "IWM (Small Caps EE.UU.)",
+        "VEA": "VEA (Desarrollados ex-EE.UU.)",
+        "EEM": "EEM (Emergentes)",
+        "GLD": "GLD (Oro)",
+        "USO": "USO (Petróleo)",
+        "COPX": "COPX (Minería de Cobre)",
+        "TLT": "TLT (Bonos Largos EE.UU.)",
+        "HYG": "HYG (Crédito High Yield)",
+        "UUP": "UUP (Dólar)",
+        "IBIT": "IBIT (Bitcoin)"
+    },
     "Materias Primas": {
         "Metales Preciosos": {
             "GC=F": "Oro",
