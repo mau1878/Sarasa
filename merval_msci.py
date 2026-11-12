@@ -261,12 +261,15 @@ def _fill_last_day(data, tickers, kwargs):
         if day not in data.index:
             data.loc[day] = np.nan
             data = data.sort_index()
+        filled = False
         for f in fields:
             col = (f, t) if multi else f
             if pd.isna(data.loc[day, col]):
                 data.loc[day, col] = float(sr.iloc[-1])
-        logger.warning(f"yf_download: {t} sin barra diaria del {day.date()}; "
-                       f"se usa el último precio intradía ({float(sr.iloc[-1]):.4f})")
+                filled = True
+        if filled:
+            logger.warning(f"yf_download: {t} sin barra diaria del {day.date()}; "
+                           f"se usa el último precio intradía ({float(sr.iloc[-1]):.4f})")
     return data
 
 

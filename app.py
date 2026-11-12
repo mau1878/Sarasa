@@ -467,6 +467,10 @@ if tool == "Evolución de retornos":
         adjust_ccl = st.checkbox("Ajustar por USD CCL (YPFD.BA/YPF)", False)
        
     exclude = st.text_input("Excluir tickers (coma)", "")
+    extended_hours = st.checkbox(
+        "Usar Pre/After Market en el último dato (solo EEUU)", False,
+        help="El último punto usa el último precio de 1 min incluyendo pre y after market, en vez del cierre regular."
+    )
     
     if st.button("Generar gráfico"):
         tickers = []
@@ -496,7 +500,8 @@ if tool == "Evolución de retornos":
                 smooth=smooth,
                 ccl_adjust=adjust_ccl,
                 frequency=freq_map[frequency_option],
-                custom_start_date=custom_start_date  # ← New parameter
+                custom_start_date=custom_start_date,  # ← New parameter
+                extended_hours=extended_hours
             )
             if path:
                 st.image(path, width="stretch")
@@ -528,6 +533,7 @@ elif tool == "Intradía":
     custom_title = st.text_input("Título personalizado (opcional)", "")
     max_lines = st.slider("Máx. líneas", 5, 30, 15)
     smooth = st.checkbox("Suavizar curvas", True)
+    prepost = st.checkbox("Incluir Pre-Market y After-Hours", False)
 
     # === NEW: ventana horaria opcional para recortar lo que se muestra ===
     if baseline == "Apertura de la ventana de tiempo":
@@ -594,7 +600,8 @@ elif tool == "Intradía":
                 target_date=selected_date,        # ← NEW
                 start_time=start_time_val,        # ← NEW
                 end_time=end_time_val,             # ← NEW
-                ref_times=ref_times                # ← NEW
+                ref_times=ref_times,               # ← NEW
+                prepost=prepost
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")

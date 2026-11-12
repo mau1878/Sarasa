@@ -101,56 +101,57 @@ def find_closest_trading_day(df, target_date):
     return df.index.min()
 
 
-def _fill_last_day_intraday(raw):
+def _apply_extended_hours(df):
     """
-    Yahoo a veces publica tarde la barra diaria de la última rueda: devuelve la fila
-    vacía (NaN) o directamente no la devuelve. En ese caso se completa con el último
-    precio de 1 minuto de esa rueda (aprox. al cierre; se reemplaza solo cuando
-    Yahoo publique la barra diaria definitiva).
+    Reemplaza (o agrega) el último dato de cada ticker con el último precio de 1 minuto
+    incluyendo Pre-Market y After-Hours. Solo tickers de EEUU (se omiten .BA e índices ^).
+    Si la última sesión con datos es posterior a la última fila diaria, agrega esa fila.
     """
-    if raw is None or raw.empty:
-        return raw
+    cols = [c for c in df.columns if not str(c).upper().endswith('.BA') and not str(c).startswith('^')]
+    if df.empty or not cols:
+        return df
     try:
-        cols = list(raw.columns)
-        intr = yf.download(cols, period='5d', interval='1m', prepost=False,
+        intr = yf.download(cols, period='5d', interval='1m', prepost=True,
                            progress=False, auto_adjust=True)['Close']
         if isinstance(intr, pd.Series):
             intr = intr.to_frame(cols[0])
         intr = intr.dropna(how='all')
         if intr.empty:
-            return raw
-        raw = raw.copy()
-        last_daily = raw.index[-1].normalize()
+            return df
+        out = df.astype(float)  # copia de trabajo: si algo falla se devuelve df sin tocar
+        last_daily = out.index[-1].normalize()
         for c in cols:
             if c not in intr.columns:
                 continue
-            s = intr[c].dropna()
-            if s.empty:
+            sr = intr[c].dropna()
+            if sr.empty:
                 continue
-            day = pd.Timestamp(s.index[-1].date())
+            ts = sr.index[-1]
+            ts = ts.tz_convert('America/New_York') if ts.tzinfo is not None \
+                else ts.tz_localize('UTC').tz_convert('America/New_York')
+            day = pd.Timestamp(ts.date())
             if day < last_daily:
                 continue
-            if day > last_daily or pd.isna(raw.loc[raw.index[-1], c]):
-                if day not in raw.index:
-                    raw.loc[day] = np.nan
-                    raw = raw.sort_index()
-                if pd.isna(raw.loc[day, c]):
-                    raw.loc[day, c] = float(s.iloc[-1])
-                    print(f"AVISO: {c} sin barra diaria del {day.date()}; "
-                          f"se usa último precio intradía ({float(s.iloc[-1]):.4f})")
+            if day not in out.index:
+                out.loc[day] = np.nan
+                out = out.sort_index()
+            out.loc[day, c] = float(sr.iloc[-1])
+            print(f"DEBUG: {c} último precio con Pre/After Market ({ts:%Y-%m-%d %H:%M} NY) = {float(sr.iloc[-1]):.4f}")
+        return out
     except Exception as e:
-        print(f"AVISO: no se pudo completar la última rueda con datos intradía ({e})")
-    return raw
+        print(f"AVISO: no se pudo usar Pre/After Market ({e})")
+    return df
 
 
-def fetch_data(tickers, start_date):
+def fetch_data(tickers, start_date, extended_hours=False):
     end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
     data = yf_download(tickers, start=start_date, end=end_date,
                        progress=False, auto_adjust=True)['Close']
     if isinstance(data, pd.Series):
         data = data.to_frame()
-    data = _fill_last_day_intraday(data)
     data = data.dropna(how='all').dropna(axis=1, how='all')
+    if extended_hours:
+        data = _apply_extended_hours(data)
     data = apply_dividend_adjustments(data)
     data = data.ffill(limit=5).bfill(limit=5)
     return data
@@ -186,7 +187,7 @@ def get_reference_date(period: str, now: datetime):
 
 
 # ===================== INTRADAY FUNCTIONS =====================
-def fetch_intraday_data(tickers, target_date=None):
+def fetch_intraday_data(tickers, target_date=None, prepost=False):
     """Fetch 1-minute data for a specific date"""
     if target_date is None:
         target_date = datetime.now().date()
@@ -197,7 +198,7 @@ def fetch_intraday_data(tickers, target_date=None):
 
     data = yf.download(
         tickers, start=start, end=end, interval="1m",
-        progress=False, prepost=False, auto_adjust=True
+        progress=False, prepost=prepost, auto_adjust=True
     )['Close']
 
     if isinstance(data, pd.Series):
@@ -208,14 +209,17 @@ def fetch_intraday_data(tickers, target_date=None):
 
     data = data.dropna(how='all').dropna(axis=1, how='all')
 
-    # Robust timezone handling
+    # Hora de Nueva York (con Pre/After Market el día en UTC se corta a las 20:00 NY)
     if hasattr(data.index, 'tz') and data.index.tz is not None:
-        data.index = data.index.tz_convert(None)
+        data.index = data.index.tz_convert('America/New_York')
+    else:
+        data.index = pd.to_datetime(data.index).tz_localize('UTC').tz_convert('America/New_York')
 
     target_date_only = target_dt.date()
     data = data[data.index.date == target_date_only]
 
-    data = data.ffill(limit=5).bfill(limit=5)
+    # En Pre/After Market hay minutos sin operaciones: se arrastra el último precio
+    data = data.ffill(limit=None if prepost else 5).bfill(limit=5)
     return data
 
 
@@ -245,19 +249,28 @@ def _parse_ref_times(ref_times):
 
 def run_intraday_evolution(tickers, group_name="Activos", custom_title=None,
                            max_lines=15, smooth=True, baseline="open", target_date=None,
-                           start_time=None, end_time=None, ref_times=None):
-    df = fetch_intraday_data(tickers, target_date)
+                           start_time=None, end_time=None, ref_times=None, prepost=False):
+    df = fetch_intraday_data(tickers, target_date, prepost=prepost)
     if df.empty:
         return None
     return plot_intraday_evolution(df, group_name, custom_title, max_lines, smooth, baseline,
-                                   start_time=start_time, end_time=end_time, ref_times=ref_times)
+                                   start_time=start_time, end_time=end_time, ref_times=ref_times,
+                                   prepost=prepost)
 
 
 def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=True, baseline="open",
-                            start_time=None, end_time=None, ref_times=None):
+                            start_time=None, end_time=None, ref_times=None, prepost=False):
     if df.empty or len(df) < 5:
         print("DEBUG: df intraday vacío o muy pequeño")
         return None
+
+    # Con Pre/After Market se marcan apertura y cierre de la rueda regular
+    if prepost:
+        ref_times = list(ref_times or [])
+        have = {t for t, _ in _parse_ref_times(ref_times)}
+        for hhmm, label in (("09:30", "Apertura"), ("16:00", "Cierre")):
+            if datetime.strptime(hhmm, "%H:%M").time() not in have:
+                ref_times.append(f"{hhmm}|{label}")
 
     # Timezone to NY
     if hasattr(df.index, 'tz') and df.index.tz is not None:
@@ -345,6 +358,9 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         print("DEBUG: returns quedó vacío después de limpiar. Ningún ticker válido.")
         return None
 
+    if prepost:
+        title_base = f"{title_base} · con Pre/After Market"
+
     if late_starters and baseline == "open":
         title_base = title_base.replace("desde Apertura", "desde Apertura (algunos tickers empezaron tarde)", 1)
 
@@ -417,7 +433,8 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
         t0 = returns.index[0]
         t1 = returns.index[-1]
         span_min = (t1 - t0).total_seconds() / 60
-        tick_freq = '5min' if span_min <= 60 else '10min' if span_min <= 120 else '30min'
+        tick_freq = ('5min' if span_min <= 60 else '10min' if span_min <= 120 else
+                     '30min' if span_min <= 480 else '1h')
         tick_times = pd.date_range(start=t0.floor(tick_freq), end=t1.ceil(tick_freq), freq=tick_freq)
         tick_locs = []
         tick_labels = []
@@ -625,7 +642,8 @@ def run_returns_evolution(
         smooth=True,
         ccl_adjust=False,
         frequency='D',
-        custom_start_date=None
+        custom_start_date=None,
+        extended_hours=False
 ):
     now = datetime.now()
 
@@ -643,7 +661,7 @@ def run_returns_evolution(
     if custom_start_date:
         fetch_start = (datetime.combine(custom_start_date, datetime.min.time()) - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    df = fetch_data(tickers, fetch_start)
+    df = fetch_data(tickers, fetch_start, extended_hours=extended_hours)
 
     if exclude_tickers:
         exclude_list = [t.strip().upper() for t in exclude_tickers.split(",") if t.strip()]
@@ -679,6 +697,9 @@ def run_returns_evolution(
         else:
             print("Warning: Could not fetch CCL proxy correctly.")
 
+    if extended_hours:
+        custom_title = f"{custom_title or group_name} · último dato con Pre/After Market"
+
     return plot_returns_evolution(
         df_for_plot,
         group_name,
@@ -701,13 +722,16 @@ if __name__ == "__main__":
     parser.add_argument('--exclude_tickers', type=str, default=None)
     parser.add_argument('--smooth', type=str, default='s')
     parser.add_argument('--ccl_adjust', action='store_true')
+    parser.add_argument('--extended_hours', action='store_true',
+                        help='Usar el último precio incluyendo Pre/After Market (solo EEUU)')
     args = parser.parse_args()
 
     is_smooth = args.smooth.lower() in ['s', 'true', '1', 'yes']
 
     path = run_returns_evolution(
         args.tickers, args.period, None, args.group_name,
-        args.custom_title, args.max_lines, args.exclude_tickers, is_smooth, args.ccl_adjust
+        args.custom_title, args.max_lines, args.exclude_tickers, is_smooth, args.ccl_adjust,
+        extended_hours=args.extended_hours
     )
     if path:
         print(os.path.abspath(path))
