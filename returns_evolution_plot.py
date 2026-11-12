@@ -101,12 +101,55 @@ def find_closest_trading_day(df, target_date):
     return df.index.min()
 
 
+def _fill_last_day_intraday(raw):
+    """
+    Yahoo a veces publica tarde la barra diaria de la última rueda: devuelve la fila
+    vacía (NaN) o directamente no la devuelve. En ese caso se completa con el último
+    precio de 1 minuto de esa rueda (aprox. al cierre; se reemplaza solo cuando
+    Yahoo publique la barra diaria definitiva).
+    """
+    if raw is None or raw.empty:
+        return raw
+    try:
+        cols = list(raw.columns)
+        intr = yf.download(cols, period='5d', interval='1m', prepost=False,
+                           progress=False, auto_adjust=True)['Close']
+        if isinstance(intr, pd.Series):
+            intr = intr.to_frame(cols[0])
+        intr = intr.dropna(how='all')
+        if intr.empty:
+            return raw
+        raw = raw.copy()
+        last_daily = raw.index[-1].normalize()
+        for c in cols:
+            if c not in intr.columns:
+                continue
+            s = intr[c].dropna()
+            if s.empty:
+                continue
+            day = pd.Timestamp(s.index[-1].date())
+            if day < last_daily:
+                continue
+            if day > last_daily or pd.isna(raw.loc[raw.index[-1], c]):
+                if day not in raw.index:
+                    raw.loc[day] = np.nan
+                    raw = raw.sort_index()
+                if pd.isna(raw.loc[day, c]):
+                    raw.loc[day, c] = float(s.iloc[-1])
+                    print(f"AVISO: {c} sin barra diaria del {day.date()}; "
+                          f"se usa último precio intradía ({float(s.iloc[-1]):.4f})")
+    except Exception as e:
+        print(f"AVISO: no se pudo completar la última rueda con datos intradía ({e})")
+    return raw
+
+
 def fetch_data(tickers, start_date):
     end_date = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
     data = yf_download(tickers, start=start_date, end=end_date,
                        progress=False, auto_adjust=True)['Close']
     if isinstance(data, pd.Series):
         data = data.to_frame()
+    data = _fill_last_day_intraday(data)
     data = data.dropna(how='all').dropna(axis=1, how='all')
     data = apply_dividend_adjustments(data)
     data = data.ffill(limit=5).bfill(limit=5)
