@@ -198,6 +198,78 @@ def _tickers_list(tickers):
     return list(tickers)
 
 
+def _fill_last_day(data, tickers, kwargs):
+    """
+    Yahoo a veces publica tarde la barra diaria de la última rueda: la devuelve con
+    NaN (Close y Adj Close) o directamente no la devuelve, y los scripts la pierden
+    al hacer dropna. En ese caso se completa con el último precio de 1 minuto de esa
+    rueda (aprox. al cierre). Cuando Yahoo publica la barra oficial, esto no actúa.
+    Solo para descargas diarias que incluyen hasta hoy. Si algo falla, no toca nada.
+    """
+    import numpy as np
+    import yfinance as yf
+
+    if data is None or data.empty or (kwargs.get("interval") or "1d") != "1d":
+        return data
+    multi = isinstance(data.columns, pd.MultiIndex)
+    tl = _tickers_list(tickers)
+    if multi:
+        lvl0 = data.columns.get_level_values(0)
+        fields = [f for f in ("Close", "Adj Close") if f in lvl0]
+        names = list(dict.fromkeys(data.columns.get_level_values(1)))
+        get = lambda f, t: data[(f, t)]
+    else:
+        fields = [f for f in ("Close", "Adj Close") if f in data.columns]
+        names = tl[:1]
+        get = lambda f, t: data[f]
+    if not fields or not names:
+        return data
+
+    idx = pd.to_datetime(data.index)
+    if idx.tz is not None:
+        data = data.copy()
+        data.index = idx = idx.tz_localize(None)
+    last_idx = idx[-1].normalize()
+
+    now_ny = pd.Timestamp.now(tz="America/New_York")
+    late = now_ny.weekday() < 5 and now_ny.hour >= 16 and last_idx < pd.Timestamp(now_ny.date())
+    price_f = fields[0]
+    cands = [t for t in names if late or pd.isna(get(price_f, t).iloc[-1])]
+    if not cands:
+        return data
+
+    end = kwargs.get("end")
+    end_ts = None if end is None else pd.Timestamp(end)
+    intr = yf.download(cands, period="5d", interval="1m", prepost=False,
+                       progress=False, auto_adjust=True)["Close"]
+    if isinstance(intr, pd.Series):
+        intr = intr.to_frame(cands[0])
+    intr = intr.dropna(how="all")
+    if intr.empty:
+        return data
+
+    data = data.copy()
+    for t in cands:
+        if t not in intr.columns:
+            continue
+        sr = intr[t].dropna()
+        if sr.empty:
+            continue
+        day = pd.Timestamp(sr.index[-1].date())
+        if day < last_idx or (end_ts is not None and day >= end_ts):
+            continue
+        if day not in data.index:
+            data.loc[day] = np.nan
+            data = data.sort_index()
+        for f in fields:
+            col = (f, t) if multi else f
+            if pd.isna(data.loc[day, col]):
+                data.loc[day, col] = float(sr.iloc[-1])
+        logger.warning(f"yf_download: {t} sin barra diaria del {day.date()}; "
+                       f"se usa el último precio intradía ({float(sr.iloc[-1]):.4f})")
+    return data
+
+
 def yf_download(tickers, *args, **kwargs):
     """
     Reemplazo directo de yf.download: igual salida, pero si entre los tickers está
@@ -206,6 +278,10 @@ def yf_download(tickers, *args, **kwargs):
     """
     import yfinance as yf
     data = yf.download(tickers, *args, **kwargs)
+    try:
+        data = _fill_last_day(data, tickers, kwargs)
+    except Exception as e:
+        logger.warning(f"yf_download: no se pudo completar la última rueda ({e})")
     try:
         tl = [t.upper() for t in _tickers_list(tickers)]
         if "^MERV" not in tl or data is None or data.empty:
