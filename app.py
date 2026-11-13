@@ -637,7 +637,11 @@ elif tool == "Top ruedas":
         with dcol2:
             top_end = st.date_input("Hasta", value=datetime.now().date(),
                                     min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date())
-    top_partial = st.checkbox("Incluir la rueda en curso (datos parciales)", False)
+    ocol1, ocol2 = st.columns(2)
+    with ocol1:
+        top_partial = st.checkbox("Incluir la rueda en curso (datos parciales)", False)
+    with ocol2:
+        top_by_date = st.checkbox("Ordenar por fecha (en vez de por valor)", False)
 
     if st.button("Generar gráfico"):
         if not top_ticker.strip():
@@ -646,7 +650,7 @@ elif tool == "Top ruedas":
             path, table = run_top_days(
                 top_ticker, metric=top_metric, n=top_n, mode=top_mode, period=top_period,
                 start_date=top_start, end_date=top_end, include_partial=top_partial,
-                return_table=True,
+                return_table=True, sort_by_date=top_by_date,
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
