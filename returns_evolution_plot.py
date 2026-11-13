@@ -65,6 +65,11 @@ def _build_palette(n_max=40, bg=BG_COLOR, min_L=55, min_bg_dist=40):
     return [to_hex(cand[i]) for i in chosen]
 
 
+def _label_fontsize(n_lines, max_size=18, min_size=9):
+    """Tamaño de la etiqueta de cada ticker según cuántas líneas hay (pocas líneas -> más grande)."""
+    return float(np.clip(21 - 0.55 * n_lines, min_size, max_size))
+
+
 def get_line_colors(n):
     """Devuelve n colores lo más distintos posible entre sí."""
     pal = _build_palette()
@@ -413,12 +418,13 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
     ax.fill_between([-0.5, n_points * 2], 0, y_min - 100, color='red', alpha=0.02)
 
     label_x_pos = n_points + (n_points * 0.04)
+    label_fs = _label_fontsize(len(returns.columns))
     texts = []
     for i, ticker in enumerate(returns.columns):
         color = colors[i]
         txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
                       f" {ticker} ({returns[ticker].iloc[-1]:+.2f}%)",
-                      color=color, fontsize=10, fontweight='bold',
+                      color=color, fontsize=label_fs, fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
         texts.append(txt)
@@ -579,12 +585,13 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
     ax.set_xlim(-0.5, n_points * 1.35)
 
     label_x_pos = n_points + (n_points * 0.05)
+    label_fs = _label_fontsize(len(returns.columns))
     texts = []
     for i, ticker in enumerate(returns.columns):
         color = colors[i]
         txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
                       f" {ticker} ({final_returns[ticker]:+.1f}%)",
-                      color=color, fontsize=10, fontweight='bold',
+                      color=color, fontsize=label_fs, fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
         txt.set_gid(ticker)
