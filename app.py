@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from returns_evolution_plot import run_returns_evolution
 from performance_plot import run_performance
 from drawdown_plot import run_drawdown
+from top_ruedas_plot import run_top_days, METRICS as TOP_METRICS, PERIODS as TOP_PERIODS
 from correlation_plot import run_correlation, DENDROGRAM_FILE, CLUSTERS_CSV_FILE
 from portfolio_builder import render_portfolio_ui
 from heatmap_script import run_heatmap
@@ -50,6 +51,7 @@ tool = st.sidebar.selectbox(
         "Performance",
         "Drawdown",
         "Intradía",
+        "Top ruedas",
         "Correlación",
         "Formación de cartera",
         "Heatmap histórico",
@@ -607,6 +609,52 @@ elif tool == "Intradía":
                 st.image(path, width="stretch")
             else:
                 st.warning("No se pudieron obtener datos para esa fecha (yfinance solo guarda ~7 días de 1m). Prueba con una fecha más reciente.")
+# ---- Top ruedas ----
+elif tool == "Top ruedas":
+    top_ticker = st.text_input("Ticker", "SPY")
+    top_metric = st.selectbox(
+        "Métrica",
+        list(TOP_METRICS.keys()),
+        format_func=lambda k: TOP_METRICS[k][0],
+    )
+    top_signed = TOP_METRICS[top_metric][1]
+    tcol1, tcol2 = st.columns(2)
+    with tcol1:
+        top_n = st.slider("Top N", 3, 30, 10)
+    with tcol2:
+        top_period = st.selectbox("Período", TOP_PERIODS, index=TOP_PERIODS.index("1Y"))
+    top_mode = "abs"
+    if top_signed:
+        _modos = {"Mayor magnitud (sube o baja)": "abs", "Mayores subas": "up", "Mayores bajas": "down"}
+        top_mode = _modos[st.radio("Orden", list(_modos.keys()), horizontal=True)]
+    top_custom = st.checkbox("Usar rango de fechas personalizado", False)
+    top_start = top_end = None
+    if top_custom:
+        dcol1, dcol2 = st.columns(2)
+        with dcol1:
+            top_start = st.date_input("Desde", value=(datetime.now() - timedelta(days=365)).date(),
+                                      min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date())
+        with dcol2:
+            top_end = st.date_input("Hasta", value=datetime.now().date(),
+                                    min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date())
+    top_partial = st.checkbox("Incluir la rueda en curso (datos parciales)", False)
+
+    if st.button("Generar gráfico"):
+        if not top_ticker.strip():
+            st.warning("Ingresá un ticker.")
+        else:
+            path, table = run_top_days(
+                top_ticker, metric=top_metric, n=top_n, mode=top_mode, period=top_period,
+                start_date=top_start, end_date=top_end, include_partial=top_partial,
+                return_table=True,
+            )
+            if path and os.path.exists(path):
+                st.image(path, width="stretch")
+                with st.expander("Ver tabla"):
+                    st.dataframe(table)
+            else:
+                st.warning("No se pudo generar el gráfico (sin datos para ese ticker/métrica/rango).")
+
 # ---- Performance ----
 # ---- Performance ----
 elif tool == "Performance":
