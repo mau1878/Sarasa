@@ -169,11 +169,24 @@ def top_days_table(ticker, metric="volumen", n=10, mode="abs", period="1Y",
 
 # ===================== FORMATO =====================
 def _fmt_big(x):
-    ax = abs(x)
+    """Número grande abreviado con ~3 cifras significativas: 819M, 62.6M, 5.49M."""
+    ax_ = abs(x)
     for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
-        if ax >= div:
-            return f"{x / div:.2f}{suf}"
+        if ax_ >= div:
+            v = x / div
+            a = abs(v)
+            return (f"{v:.0f}" if a >= 100 else f"{v:.1f}" if a >= 10 else f"{v:.2f}") + suf
     return f"{x:,.0f}"
+
+
+def _fmt_axis(x):
+    """Etiqueta de eje sin decimales sobrantes: 200M, 1B."""
+    if x == 0:
+        return "0"
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(x) >= div:
+            return f"{x / div:g}{suf}"
+    return f"{x:g}"
 
 
 def _fmt_value(metric, v):
@@ -193,66 +206,105 @@ def _title_phrase(metric, mode):
 
 
 # ===================== GRÁFICO =====================
-def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="top_ruedas.png"):
+GOLD = '#ffd166'
+MUTED = '#9a9ac0'
+
+
+def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="top_ruedas.png",
+                  ref_value=None, sort_by_date=False):
     label, signed, col = METRICS[metric]
+    top = top.copy()
+    top["Rank"] = np.arange(1, len(top) + 1)          # puesto según la métrica
+    if sort_by_date:
+        top = top.sort_index()                         # cronológico (el puesto se mantiene en la etiqueta)
     k = len(top)
 
-    fig_h = max(5.2, 0.62 * k + 2.6)
-    fig = plt.figure(figsize=(13, fig_h), facecolor=PAPER_COLOR)
+    fig_h = max(5.4, 0.66 * k + 2.8)
+    fig = plt.figure(figsize=(13.5, fig_h), facecolor=PAPER_COLOR)
     ax = fig.add_subplot(111, facecolor=BG_COLOR)
 
     vals = top["Valor"].values
-    y = np.arange(k)[::-1]  # el #1 arriba
+    y = np.arange(k)[::-1]  # la primera fila arriba
+
+    # Color de las barras: con signo -> según el valor; volumen/rango -> según el sentido de la rueda
     if signed:
         colors = [UP_COLOR if v >= 0 else DOWN_COLOR for v in vals]
     else:
-        colors = [NEUTRAL_COLOR] * k
-    ax.barh(y, vals, color=colors, alpha=0.9, height=0.68, zorder=3)
+        vc = top["VarCierre"].values
+        colors = [NEUTRAL_COLOR if pd.isna(v) else (UP_COLOR if v >= 0 else DOWN_COLOR) for v in vc]
+    ax.barh(y, vals, color=colors, alpha=0.88, height=0.66, zorder=3)
 
-    span = np.nanmax(np.abs(vals)) if k else 1
+    lo, hi = np.nanmin(vals), np.nanmax(vals)
+    span = max(abs(lo), abs(hi)) or 1
     pad = span * 0.012
     for yi, (dt, row) in zip(y, top.iterrows()):
         v = row["Valor"]
-        txt = _fmt_value(metric, v)
-        ha = "left" if v >= 0 else "right"
-        xpos = v + (pad if v >= 0 else -pad)
-        ax.text(xpos, yi, txt, va="center", ha=ha, fontsize=14, fontweight="bold",
-                color=TEXT_COLOR, zorder=5)
-        # en métricas de volumen/rango, columna a la derecha con la variación del día
-        if not signed and pd.notna(row.get("VarCierre", np.nan)):
-            ax.text(0.995, yi, f"{row['VarCierre']:+.2f}% día", transform=ax.get_yaxis_transform(),
-                    va="center", ha="right", fontsize=11, color="#9a9ac0", zorder=5)
+        ax.text(v + (pad if v >= 0 else -pad), yi, _fmt_value(metric, v),
+                va="center", ha="left" if v >= 0 else "right",
+                fontsize=15, fontweight="bold", color="#ffffff", zorder=5)
 
+    # Columna de contexto fuera del área de barras, con encabezado y color según signo
+    if signed:
+        head = "Volumen"
+        ctx = [(_fmt_big(r["Volumen"]) if pd.notna(r["Volumen"]) else "–", MUTED) for _, r in top.iterrows()]
+    else:
+        head = "Var. del día"
+        ctx = []
+        for _, r in top.iterrows():
+            v = r["VarCierre"]
+            ctx.append(("–", MUTED) if pd.isna(v) else (f"{v:+.2f}%", UP_COLOR if v >= 0 else DOWN_COLOR))
+    ax.text(1.015, 1.0 + 0.012, head, transform=ax.transAxes, ha="left", va="bottom",
+            fontsize=12, color=MUTED, fontweight="bold")
+    for yi, (txt, colr) in zip(y, ctx):
+        ax.text(1.015, yi, txt, transform=ax.get_yaxis_transform(), ha="left", va="center",
+                fontsize=14, fontweight="bold", color=colr, zorder=5)
+
+    # Puesto + fecha
     ax.set_yticks(y)
-    ax.set_yticklabels([f"{dt:%d/%m/%Y} ({_DIAS[dt.weekday()]})" for dt in top.index],
-                       fontsize=12, color=TEXT_COLOR)
-    lo, hi = np.nanmin(vals), np.nanmax(vals)
-    left = min(0, lo) - (abs(lo) * 0.18 if lo < 0 else 0)
-    right = max(0, hi) + abs(hi) * (0.45 if not signed else 0.2)
+    ax.set_yticklabels([f"#{int(r['Rank'])}  {dt:%d/%m/%Y} ({_DIAS[dt.weekday()]})"
+                        for dt, r in top.iterrows()], fontsize=13, color=TEXT_COLOR)
+
+    left = min(0, lo) - (abs(lo) * 0.16 if lo < 0 else 0)
+    right = max(0, hi) + abs(hi) * (0.12 if not signed else 0.30)
     ax.set_xlim(left, right)
-    ax.set_ylim(-0.7, k - 0.3)
+    ax.set_ylim(-0.65, k - 0.35)
+
     if signed:
         ax.axvline(0, color='#ff4d4d', linewidth=1.2, linestyle='--', alpha=0.8, zorder=4)
+    if ref_value is not None and np.isfinite(ref_value) and not signed:
+        ax.axvline(ref_value, color=GOLD, linewidth=1.3, linestyle=(0, (4, 3)), alpha=0.9, zorder=4)
+        ax.text(ref_value, 1.012, f" Mediana del período: {_fmt_value(metric, ref_value)}",
+                transform=ax.get_xaxis_transform(), ha="left", va="bottom", fontsize=11, color=GOLD)
+
     ax.grid(True, axis="x", color=GRID_COLOR, linestyle=':', linewidth=0.6)
     ax.set_axisbelow(True)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
     for sp in ("left", "bottom"):
         ax.spines[sp].set_color(TEXT_COLOR)
-        ax.spines[sp].set_alpha(0.4)
-    ax.tick_params(axis="x", colors="#c0c0ff", labelsize=10)
-    ax.tick_params(axis="y", length=0)
+        ax.spines[sp].set_alpha(0.35)
+    ax.tick_params(axis="x", colors="#c0c0ff", labelsize=11)
+    ax.tick_params(axis="y", length=0, pad=8)
 
     if metric in ("volumen", "volumen_nominal"):
-        ax.xaxis.set_major_formatter(plt.FuncFormatter(
-            lambda v, _: ("$" if metric == "volumen_nominal" else "") + _fmt_big(v)))
+        pre = "$" if metric == "volumen_nominal" else ""
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: pre + _fmt_axis(v)))
     elif metric == "volumen_relativo":
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"×{v:g}"))
     else:
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}%"))
 
+    # Leyenda de colores (solo cuando el color indica el sentido de la rueda)
+    if not signed:
+        from matplotlib.patches import Patch
+        leg = ax.legend(handles=[Patch(color=UP_COLOR, alpha=0.88, label="Rueda con suba"),
+                                 Patch(color=DOWN_COLOR, alpha=0.88, label="Rueda con baja")],
+                        loc="lower right", frameon=False, fontsize=11, labelcolor=TEXT_COLOR)
+        leg.set_zorder(6)
+
+    orden = "ordenadas por fecha" if sort_by_date else "ordenadas por valor"
     title = f"Top {k} ruedas por {_title_phrase(metric, mode)} — {ticker.upper()}"
-    sub = f"{start:%d/%m/%Y} – {end:%d/%m/%Y} · {n_total} ruedas analizadas"
+    sub = f"{start:%d/%m/%Y} – {end:%d/%m/%Y} · {n_total} ruedas analizadas · {orden}"
     fig.suptitle(f"{title}\n{sub}", fontsize=20, color=TEXT_COLOR, fontweight="bold", y=0.985)
     fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=WATERMARK_COLOR,
              ha="center", va="center", rotation=30, zorder=999)
@@ -266,7 +318,7 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
 # ===================== RUNNER =====================
 def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                  start_date=None, end_date=None, include_partial=False,
-                 return_table=False, output_path="top_ruedas.png"):
+                 return_table=False, output_path="top_ruedas.png", sort_by_date=False):
     ticker = ticker.strip().upper()
     top, m, df = top_days_table(ticker, metric, n, mode, period, start_date, end_date, include_partial)
     if top is None:
@@ -275,7 +327,9 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
     n_total = int(m[col].notna().sum())
     start = m.index.min()
     end = m.index.max()
-    path = plot_top_days(top, ticker, metric, mode if signed else "abs", n_total, start, end, output_path)
+    ref = float(m[col].median()) if not signed else None
+    path = plot_top_days(top, ticker, metric, mode if signed else "abs", n_total, start, end, output_path,
+                         ref_value=ref, sort_by_date=sort_by_date)
 
     if return_table:
         table = top[["Valor", "Cierre", "VarCierre", "Volumen", "Rango", "AperCierre", "Gap"]].copy()
@@ -298,8 +352,9 @@ if __name__ == "__main__":
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--include_partial", action="store_true")
+    parser.add_argument("--sort_by_date", action="store_true", help="Ordenar las barras por fecha en vez de por valor")
     args = parser.parse_args()
     p = run_top_days(args.ticker, args.metric, args.n, args.mode, args.period,
-                     args.start, args.end, args.include_partial)
+                     args.start, args.end, args.include_partial, sort_by_date=args.sort_by_date)
     if p:
         print(os.path.abspath(p))
