@@ -566,8 +566,7 @@ def _text_color_for(bg):
 
 
 def _draw_rank_strip(a, who, color_of, label):
-    """Franja fina: cada día se pinta con el color del ticker (líder o último). Rotula los tramos largos."""
-    from itertools import groupby
+    """Franja fina: cada día se pinta con el color del ticker (líder o último). Los rótulos se agregan al final."""
     n = len(who)
     x = np.arange(n)
     a.bar(x, 1, width=1.0, color=[color_of.get(t, (0, 0, 0, 0)) for t in who], align='center', linewidth=0)
@@ -577,13 +576,33 @@ def _draw_rank_strip(a, who, color_of, label):
         sp.set_visible(False)
     a.text(-0.008, 0.5, label, transform=a.transAxes, ha='right', va='center',
            fontsize=11, color=TEXT_COLOR, fontweight='bold')
-    min_len = max(6, int(n * 0.045))
+
+
+def _label_strip_runs(fig, a, who, color_of):
+    """
+    Escribe el ticker dentro de cada tramo de la franja si entra en el ancho disponible (en píxeles),
+    achicando la letra hasta 7 pt. Se llama con el layout final, así que sirve con 10 o con 250 ruedas.
+    """
+    from itertools import groupby
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    x0, x1 = a.get_xlim()
+    ext = a.get_window_extent(r)
+    px_per_x = ext.width / (x1 - x0)
+    max_fs = min(11.0, 0.62 * ext.height * 72 / fig.dpi)
     pos = 0
     for t, grp in groupby(who):
         length = len(list(grp))
-        if t in color_of and length >= min_len:
-            a.text(pos + (length - 1) / 2, 0.5, t, ha='center', va='center', fontsize=10,
-                   fontweight='bold', color=_text_color_for(color_of[t]), clip_on=True)
+        if t in color_of:
+            avail = length * px_per_x * 0.94
+            fs = max_fs
+            while fs >= 7:
+                txt = a.text(pos + (length - 1) / 2, 0.5, t, ha='center', va='center', fontsize=fs,
+                             fontweight='bold', color=_text_color_for(color_of[t]), clip_on=True)
+                if txt.get_window_extent(r).width <= avail:
+                    break
+                txt.remove()
+                fs -= 1
         pos += length
 
 
@@ -823,6 +842,9 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
 
     plt.tight_layout()
     _avoid_title_overlap(fig, ax)
+    if rank_strips:
+        _label_strip_runs(fig, ax_lead, lead, color_of)
+        _label_strip_runs(fig, ax_last, last, color_of)
     output_path = "returns_evolution.png"
     plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close(fig)
