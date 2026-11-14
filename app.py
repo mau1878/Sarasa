@@ -473,6 +473,24 @@ if tool == "Evolución de retornos":
         "Usar Pre/After Market en el último dato (solo EEUU)", False,
         help="El último punto usa el último precio de 1 min incluyendo pre y after market, en vez del cierre regular."
     )
+
+    with st.expander("Destacar puntos clave"):
+        highlight_str = st.text_input(
+            "Destacar tickers (coma)", "",
+            help="Esos tickers se dibujan más gruesos y el resto se atenúa."
+        )
+        mark_extremes = st.checkbox(
+            "Marcar pico, mínimo y último dato de los tickers destacados", False,
+            help="Anota el máximo y el mínimo del período y cuántos puntos porcentuales está del pico."
+        )
+        rank_strips = st.checkbox(
+            "Mostrar franjas de ranking (quién lideraba / quién iba último)", False,
+            help="Dos franjas bajo el gráfico con el color del ticker que ocupaba el 1° y el último puesto cada día."
+        )
+        events_str = st.text_area(
+            "Eventos (uno por línea: AAAA-MM-DD|texto)", "",
+            help="Ejemplo: 2026-04-09|Aranceles. Dibuja una línea vertical con la etiqueta."
+        )
     
     if st.button("Generar gráfico"):
         tickers = []
@@ -503,7 +521,11 @@ if tool == "Evolución de retornos":
                 ccl_adjust=adjust_ccl,
                 frequency=freq_map[frequency_option],
                 custom_start_date=custom_start_date,  # ← New parameter
-                extended_hours=extended_hours
+                extended_hours=extended_hours,
+                highlight=[t.strip().upper() for t in highlight_str.split(",") if t.strip()] or None,
+                mark_extremes=mark_extremes,
+                rank_strips=rank_strips,
+                events=[l.strip() for l in events_str.splitlines() if l.strip()] or None,
             )
             if path:
                 st.image(path, width="stretch")

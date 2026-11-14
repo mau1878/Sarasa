@@ -487,8 +487,48 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
 
 
 # ===================== ORIGINAL PLOT & RUNNER =====================
+EVENT_COLOR = '#ffd166'
+
+
+def _norm_list(x):
+    """Acepta 'A, B' o ['A','B'] y devuelve ['A','B'] en mayúsculas."""
+    if not x:
+        return []
+    if isinstance(x, str):
+        x = x.split(",")
+    return [str(t).strip().upper() for t in x if str(t).strip()]
+
+
+def _text_color_for(bg):
+    r, g, b = to_rgb(bg)
+    return '#05050f' if (0.299 * r + 0.587 * g + 0.114 * b) > 0.55 else '#ffffff'
+
+
+def _draw_rank_strip(a, who, color_of, label):
+    """Franja fina: cada día se pinta con el color del ticker (líder o último). Rotula los tramos largos."""
+    from itertools import groupby
+    n = len(who)
+    x = np.arange(n)
+    a.bar(x, 1, width=1.0, color=[color_of.get(t, (0, 0, 0, 0)) for t in who], align='center', linewidth=0)
+    a.set_ylim(0, 1)
+    a.set_yticks([])
+    for sp in a.spines.values():
+        sp.set_visible(False)
+    a.text(-0.008, 0.5, label, transform=a.transAxes, ha='right', va='center',
+           fontsize=11, color=TEXT_COLOR, fontweight='bold')
+    min_len = max(6, int(n * 0.045))
+    pos = 0
+    for t, grp in groupby(who):
+        length = len(list(grp))
+        if t in color_of and length >= min_len:
+            a.text(pos + (length - 1) / 2, 0.5, t, ha='center', va='center', fontsize=10,
+                   fontweight='bold', color=_text_color_for(color_of[t]), clip_on=True)
+        pos += length
+
+
 def plot_returns_evolution(df, group_name, custom_title, period="YTD",
-                           max_lines=20, smooth=True, frequency='D'):
+                           max_lines=20, smooth=True, frequency='D',
+                           highlight=None, mark_extremes=False, rank_strips=False, events=None):
     if df.empty or len(df) < 2:
         return None
 
@@ -508,10 +548,11 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
         return None
 
     final_returns = returns.iloc[-1]
+    hl_req = _norm_list(highlight)
     if len(returns.columns) > max_lines:
         top = list(final_returns.nlargest(max_lines // 2).index)
         bot = list(final_returns.nsmallest(max_lines // 2).index)
-        selected = list(dict.fromkeys(top + bot))
+        selected = list(dict.fromkeys(top + bot + [t for t in hl_req if t in returns.columns]))
         returns = returns[selected]
 
     sorted_cols = returns.iloc[-1].sort_values(ascending=False).index
@@ -519,29 +560,47 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
 
     # Paleta de colores distinguibles
     colors = get_line_colors(len(returns.columns))
+    color_of = {t: colors[i] for i, t in enumerate(returns.columns)}
+    hl = [t for t in hl_req if t in returns.columns]
+    for t in hl_req:
+        if t not in returns.columns:
+            print(f"AVISO: '{t}' no está en el gráfico; no se puede destacar")
 
-    fig = plt.figure(figsize=(17, 9.5), facecolor=PAPER_COLOR)
-    ax = fig.add_subplot(111, facecolor=BG_COLOR)
+    fig = plt.figure(figsize=(17, 9.5 + (1.1 if rank_strips else 0)), facecolor=PAPER_COLOR)
+    if rank_strips:
+        gs = fig.add_gridspec(3, 1, height_ratios=[22, 0.9, 0.9], hspace=0.12)
+        ax = fig.add_subplot(gs[0], facecolor=BG_COLOR)
+        ax_lead = fig.add_subplot(gs[1], sharex=ax, facecolor=BG_COLOR)
+        ax_last = fig.add_subplot(gs[2], sharex=ax, facecolor=BG_COLOR)
+    else:
+        ax = fig.add_subplot(111, facecolor=BG_COLOR)
 
     n_points = len(returns.index)
     x_numeric = np.arange(n_points)
     line_ends = {}
 
-    for i, ticker in enumerate(returns.columns):
-        color = colors[i]
-        y = returns[ticker].values
-        line_ends[ticker] = (n_points - 1, y[-1])
-
+    def _draw(y, color, lw, alpha, z):
         if smooth and n_points > 4:
             try:
                 spline = PchipInterpolator(x_numeric, y)
                 x_s = np.linspace(0, n_points - 1, 400)
-                y_s = spline(x_s)
-                ax.plot(x_s, y_s, color=color, linewidth=2.2, alpha=0.9, zorder=4)
-            except:
-                ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9, zorder=4)
+                ax.plot(x_s, spline(x_s), color=color, linewidth=lw, alpha=alpha, zorder=z)
+                return
+            except Exception:
+                pass
+        ax.plot(x_numeric, y, color=color, linewidth=lw, alpha=alpha, zorder=z)
+
+    for i, ticker in enumerate(returns.columns):
+        color = colors[i]
+        y = returns[ticker].values
+        line_ends[ticker] = (n_points - 1, y[-1])
+        if hl:
+            if ticker in hl:
+                _draw(y, color, 4.2, 1.0, 7)      # destacado
+            else:
+                _draw(y, color, 1.5, 0.28, 3)     # atenuado
         else:
-            ax.plot(x_numeric, y, color=color, linewidth=2.2, alpha=0.9, zorder=4)
+            _draw(y, color, 2.2, 0.9, 4)
 
     years = returns.index.year
     year_changes = np.where(years[1:] != years[:-1])[0] + 1
@@ -571,7 +630,7 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                         expand_text=(1.15, 1.4),
                         force_text=(0.1, 1.0),
                         arrowprops=dict(arrowstyle='-', color='gray', lw=0.5, alpha=0.3))
-        except:
+        except Exception:
             pass
 
     y_min, y_max = returns.min().min(), returns.max().max()
@@ -584,23 +643,71 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
 
     ax.set_xlim(-0.5, n_points * 1.35)
 
+    # ---- Pico / valle / último dato de los tickers destacados ----
+    peak_info = {}
+    if hl and mark_extremes:
+        last_i = n_points - 1
+        for t in hl:
+            yv = returns[t].values
+            c = color_of[t]
+            i_max, i_min = int(np.nanargmax(yv)), int(np.nanargmin(yv))
+            peak_info[t] = (i_max, yv[i_max])
+            ax.scatter([last_i], [yv[-1]], s=90, color=c, edgecolor='white', linewidth=1.3, zorder=9)
+            bbox = dict(facecolor=BG_COLOR, alpha=0.88, edgecolor=c, boxstyle='round,pad=0.3', linewidth=1)
+            if i_max not in (0, last_i):
+                ax.scatter([i_max], [yv[i_max]], s=110, marker='^', color=c, edgecolor='white', linewidth=1.2, zorder=9)
+                near_r = i_max > 0.88 * n_points
+                ax.annotate(f"{t} · pico {yv[i_max]:+.1f}%\n{returns.index[i_max]:%d/%m/%Y}",
+                            xy=(i_max, yv[i_max]), xytext=(-14 if near_r else 0, 20), textcoords='offset points',
+                            ha='right' if near_r else 'center', va='bottom', fontsize=12, color=c, fontweight='bold',
+                            bbox=bbox, zorder=10,
+                            arrowprops=dict(arrowstyle='-', color=c, lw=1, alpha=0.8))
+            if i_min not in (0, last_i):
+                ax.scatter([i_min], [yv[i_min]], s=110, marker='v', color=c, edgecolor='white', linewidth=1.2, zorder=9)
+                near_r = i_min > 0.88 * n_points
+                ax.annotate(f"{t} · mín. {yv[i_min]:+.1f}%\n{returns.index[i_min]:%d/%m/%Y}",
+                            xy=(i_min, yv[i_min]), xytext=(-14 if near_r else 0, -20), textcoords='offset points',
+                            ha='right' if near_r else 'center', va='top', fontsize=12, color=c, fontweight='bold',
+                            bbox=bbox, zorder=10,
+                            arrowprops=dict(arrowstyle='-', color=c, lw=1, alpha=0.8))
+
+    # ---- Eventos (líneas verticales con texto) ----
+    for ev in (events or []):
+        try:
+            d_txt, label_ev = str(ev).split('|', 1)
+            dt = pd.to_datetime(d_txt.strip())
+        except Exception:
+            print(f"AVISO: evento ignorado (formato 'YYYY-MM-DD|texto'): {ev!r}")
+            continue
+        if dt < returns.index[0] or dt > returns.index[-1]:
+            continue
+        ei = int(min(returns.index.searchsorted(dt), n_points - 1))
+        ax.axvline(ei, color=EVENT_COLOR, linestyle=(0, (3, 3)), linewidth=1.3, alpha=0.85, zorder=3)
+        ax.text(ei - 0.3, ax.get_ylim()[1] * 0.985 if ax.get_ylim()[1] > 0 else ax.get_ylim()[1],
+                f"{dt:%d/%m} · {label_ev.strip()}", rotation=90, va='top', ha='right', fontsize=11,
+                color=EVENT_COLOR, fontweight='bold', zorder=6,
+                bbox=dict(facecolor=BG_COLOR, alpha=0.8, edgecolor='none', pad=2))
+
     label_x_pos = n_points + (n_points * 0.05)
     label_fs = _label_fontsize(len(returns.columns))
     texts = []
     for i, ticker in enumerate(returns.columns):
         color = colors[i]
-        txt = ax.text(label_x_pos, returns[ticker].iloc[-1],
-                      f" {ticker} ({final_returns[ticker]:+.1f}%)",
-                      color=color, fontsize=label_fs, fontweight='bold',
+        is_hl = ticker in hl
+        lbl = f" {ticker} ({final_returns[ticker]:+.1f}%)"
+        txt = ax.text(label_x_pos, returns[ticker].iloc[-1], lbl,
+                      color=color, fontsize=label_fs * (1.15 if is_hl else 1.0), fontweight='bold',
                       va='center', ha='left', zorder=5,
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
+        if hl and not is_hl:
+            txt.set_alpha(0.6)
         txt.set_gid(ticker)
         texts.append(txt)
 
     try:
         adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
                     expand_text=(1.2, 2.2), force_text=(0, 2.5))
-    except:
+    except Exception:
         pass
 
     for txt in texts:
@@ -608,16 +715,36 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
         target_x, target_y = line_ends[ticker]
         label_x, label_y = txt.get_position()
         color = txt.get_color()
+        if ticker in hl and ticker in peak_info and peak_info[ticker][0] != n_points - 1:
+            drop = returns[ticker].iloc[-1] - peak_info[ticker][1]
+            ax.annotate(f"{drop:+.1f} pp vs pico", xy=(label_x, label_y), xycoords='data',
+                        xytext=(6, -(label_fs * 1.15 * 0.95)), textcoords='offset points',
+                        ha='left', va='top', fontsize=max(10, label_fs * 0.72), fontweight='bold',
+                        color=color, zorder=6)
         ax.annotate('',
                     xy=(target_x, target_y),
                     xytext=(label_x - 0.5, label_y),
-                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8, alpha=0.4,
+                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8,
+                                    alpha=0.8 if ticker in hl else 0.4,
                                     shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
                     zorder=3)
 
-    ax.set_xticks(range(0, n_points, max(1, n_points // 12)))
-    ax.set_xticklabels([returns.index[i].strftime('%b %d') for i in ax.get_xticks()],
-                       rotation=45, ha='right')
+    # ---- Franjas de ranking: quién lideraba / quién iba último cada día ----
+    if rank_strips:
+        lead = list(returns.idxmax(axis=1))
+        last = list(returns.idxmin(axis=1))
+        if (returns.iloc[0].abs() < 1e-9).all():   # día base: todos en 0, sin ranking
+            lead[0] = last[0] = None
+        _draw_rank_strip(ax_lead, lead, color_of, "1°")
+        _draw_rank_strip(ax_last, last, color_of, "Último")
+
+    tick_ax = ax_last if rank_strips else ax
+    tick_ax.set_xticks(range(0, n_points, max(1, n_points // 12)))
+    tick_ax.set_xticklabels([returns.index[i].strftime('%b %d') for i in tick_ax.get_xticks()],
+                            rotation=45, ha='right')
+    if rank_strips:
+        ax.tick_params(labelbottom=False)
+        ax_lead.tick_params(labelbottom=False, length=0)
 
     ax.grid(True, color=GRID_COLOR, linestyle=':', linewidth=0.5, alpha=0.3)
 
@@ -650,7 +777,11 @@ def run_returns_evolution(
         ccl_adjust=False,
         frequency='D',
         custom_start_date=None,
-        extended_hours=False
+        extended_hours=False,
+        highlight=None,
+        mark_extremes=False,
+        rank_strips=False,
+        events=None
 ):
     now = datetime.now()
 
@@ -714,7 +845,11 @@ def run_returns_evolution(
         period=period.upper(),
         max_lines=max_lines,
         smooth=smooth,
-        frequency=frequency
+        frequency=frequency,
+        highlight=highlight,
+        mark_extremes=mark_extremes,
+        rank_strips=rank_strips,
+        events=events
     )
 
 
@@ -731,6 +866,14 @@ if __name__ == "__main__":
     parser.add_argument('--ccl_adjust', action='store_true')
     parser.add_argument('--extended_hours', action='store_true',
                         help='Usar el último precio incluyendo Pre/After Market (solo EEUU)')
+    parser.add_argument('--highlight', nargs='+', default=None,
+                        help='Tickers a destacar (el resto se atenúa)')
+    parser.add_argument('--mark_extremes', action='store_true',
+                        help='Marcar pico, mínimo y último dato de los tickers destacados')
+    parser.add_argument('--rank_strips', action='store_true',
+                        help='Franjas debajo: quién lideraba y quién iba último cada día')
+    parser.add_argument('--events', nargs='*', default=None,
+                        help="Eventos 'YYYY-MM-DD|texto' (líneas verticales con etiqueta)")
     args = parser.parse_args()
 
     is_smooth = args.smooth.lower() in ['s', 'true', '1', 'yes']
@@ -738,7 +881,9 @@ if __name__ == "__main__":
     path = run_returns_evolution(
         args.tickers, args.period, None, args.group_name,
         args.custom_title, args.max_lines, args.exclude_tickers, is_smooth, args.ccl_adjust,
-        extended_hours=args.extended_hours
+        extended_hours=args.extended_hours,
+        highlight=args.highlight, mark_extremes=args.mark_extremes,
+        rank_strips=args.rank_strips, events=args.events
     )
     if path:
         print(os.path.abspath(path))
