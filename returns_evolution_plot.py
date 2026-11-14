@@ -70,6 +70,70 @@ def _label_fontsize(n_lines, max_size=18, min_size=9):
     return float(np.clip(21 - 0.55 * n_lines, min_size, max_size))
 
 
+def _spread_labels(fig, ax, texts, min_gap_scale=1.2):
+    """
+    Separa verticalmente las etiquetas finales para que no se pisen, conservando el orden por altura
+    y quedando lo más cerca posible de la posición real de cada línea. Mide en píxeles, así que
+    funciona igual con 5 o con 40 etiquetas y con cualquier tamaño de letra.
+    """
+    if len(texts) < 2:
+        return
+    try:
+        fig.tight_layout()  # layout provisorio para conocer el alto real del eje
+        y0, y1 = ax.get_ylim()
+        k = ax.get_window_extent().height / (y1 - y0)          # píxeles por unidad de dato
+        ys = np.array([t.get_position()[1] for t in texts], dtype=float)
+        hs = np.array([t.get_fontsize() * fig.dpi / 72 * min_gap_scale for t in texts])
+        below = np.array([getattr(t, '_extra_below', 0.0) for t in texts])   # texto extra colgando debajo
+        order = np.argsort(ys)
+        pos = ys[order] * k
+        up_ext = hs[order] / 2                       # hacia arriba de cada etiqueta
+        dn_ext = hs[order] / 2 + below[order]        # hacia abajo (incluye el texto extra)
+        need = up_ext[:-1] + dn_ext[1:]
+        lo, hi = y0 * k + dn_ext[0], y1 * k - up_ext[-1]
+        for _ in range(600):                                     # relajación: se empujan de a pares
+            moved = False
+            for i in range(len(pos) - 1):
+                d = pos[i + 1] - pos[i]
+                if d < need[i] - 0.5:
+                    sft = (need[i] - d) / 2
+                    pos[i] -= sft
+                    pos[i + 1] += sft
+                    moved = True
+            pos = np.clip(pos, lo, hi)
+            if not moved:
+                break
+        for i in range(len(pos) - 1):                            # pasada final: garantiza que no se solapen
+            pos[i + 1] = max(pos[i + 1], pos[i] + need[i])
+        if pos[-1] > hi:
+            pos[-1] = hi
+            for i in range(len(pos) - 2, -1, -1):
+                pos[i] = min(pos[i], pos[i + 1] - need[i])
+        for j, idx in enumerate(order):
+            x = texts[idx].get_position()[0]
+            texts[idx].set_position((x, pos[j] / k))
+    except Exception as e:
+        print(f"AVISO: no se pudieron separar las etiquetas ({e})")
+
+
+def _avoid_title_overlap(fig, ax, pad_px=10):
+    """Si el título (suptitle) pisa el eje, baja el borde superior del área de gráfico."""
+    try:
+        fig.canvas.draw()
+        r = fig.canvas.get_renderer()
+        st = getattr(fig, '_suptitle', None)
+        if st is None:
+            return
+        t_bottom = st.get_window_extent(r).y0
+        a_top = ax.get_window_extent(r).y1
+        if t_bottom - pad_px < a_top:
+            need = (a_top - (t_bottom - pad_px)) / fig.bbox.height
+            gs = ax.get_subplotspec().get_gridspec()
+            gs.update(top=max(0.3, ax.get_position().y1 - need))
+    except Exception as e:
+        print(f"AVISO: no se pudo ajustar el título ({e})")
+
+
 def get_line_colors(n):
     """Devuelve n colores lo más distintos posible entre sí."""
     pal = _build_palette()
@@ -429,11 +493,7 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
         texts.append(txt)
 
-    try:
-        adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
-                    expand_text=(1.2, 2.2), force_text=(0, 2.5))
-    except:
-        pass
+    _spread_labels(fig, ax, texts)
 
     if n_points > 10:
         t0 = returns.index[0]
@@ -480,6 +540,7 @@ def plot_intraday_evolution(df, group_name, custom_title, max_lines=15, smooth=T
              ha='center', va='center', rotation=30, zorder=999)
 
     plt.tight_layout()
+    _avoid_title_overlap(fig, ax)
     output_path = "intraday_evolution.png"
     plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close(fig)
@@ -656,18 +717,22 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
             bbox = dict(facecolor=BG_COLOR, alpha=0.88, edgecolor=c, boxstyle='round,pad=0.3', linewidth=1)
             if i_max not in (0, last_i):
                 ax.scatter([i_max], [yv[i_max]], s=110, marker='^', color=c, edgecolor='white', linewidth=1.2, zorder=9)
-                near_r = i_max > 0.88 * n_points
+                near_r, near_l = i_max > 0.88 * n_points, i_max < 0.08 * n_points
                 ax.annotate(f"{t} · pico {yv[i_max]:+.1f}%\n{returns.index[i_max]:%d/%m/%Y}",
-                            xy=(i_max, yv[i_max]), xytext=(-14 if near_r else 0, 20), textcoords='offset points',
-                            ha='right' if near_r else 'center', va='bottom', fontsize=12, color=c, fontweight='bold',
+                            xy=(i_max, yv[i_max]), xytext=(-14 if near_r else 14 if near_l else 0, 20),
+                            textcoords='offset points',
+                            ha='right' if near_r else 'left' if near_l else 'center', va='bottom',
+                            fontsize=12, color=c, fontweight='bold',
                             bbox=bbox, zorder=10,
                             arrowprops=dict(arrowstyle='-', color=c, lw=1, alpha=0.8))
             if i_min not in (0, last_i):
                 ax.scatter([i_min], [yv[i_min]], s=110, marker='v', color=c, edgecolor='white', linewidth=1.2, zorder=9)
-                near_r = i_min > 0.88 * n_points
+                near_r, near_l = i_min > 0.88 * n_points, i_min < 0.08 * n_points
                 ax.annotate(f"{t} · mín. {yv[i_min]:+.1f}%\n{returns.index[i_min]:%d/%m/%Y}",
-                            xy=(i_min, yv[i_min]), xytext=(-14 if near_r else 0, -20), textcoords='offset points',
-                            ha='right' if near_r else 'center', va='top', fontsize=12, color=c, fontweight='bold',
+                            xy=(i_min, yv[i_min]), xytext=(-14 if near_r else 14 if near_l else 0, -20),
+                            textcoords='offset points',
+                            ha='right' if near_r else 'left' if near_l else 'center', va='top',
+                            fontsize=12, color=c, fontweight='bold',
                             bbox=bbox, zorder=10,
                             arrowprops=dict(arrowstyle='-', color=c, lw=1, alpha=0.8))
 
@@ -701,14 +766,12 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
                       bbox=dict(facecolor=BG_COLOR, alpha=0.9, edgecolor='none', pad=1))
         if hl and not is_hl:
             txt.set_alpha(0.6)
+        if is_hl and ticker in peak_info and peak_info[ticker][0] != n_points - 1:
+            txt._extra_below = label_fs * 1.75 * fig.dpi / 72   # lugar para "pp vs pico" debajo
         txt.set_gid(ticker)
         texts.append(txt)
 
-    try:
-        adjust_text(texts, ax=ax, only_move={'texts': 'y'}, autoalign='y',
-                    expand_text=(1.2, 2.2), force_text=(0, 2.5))
-    except Exception:
-        pass
+    _spread_labels(fig, ax, texts)
 
     for txt in texts:
         ticker = txt.get_gid()
@@ -759,6 +822,7 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
              ha='center', va='center', rotation=30, zorder=999)
 
     plt.tight_layout()
+    _avoid_title_overlap(fig, ax)
     output_path = "returns_evolution.png"
     plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor=PAPER_COLOR)
     plt.close(fig)
