@@ -805,7 +805,9 @@ def run_performance(
     dual_style="auto",       # 'auto' | 'paired' | 'bullet' (solo con 2 fechas)
     compare_periods=None,    # ('YTD','MTD'): compara dos períodos predefinidos (sin fechas a mano)
     two_columns=False,       # perdedores | ganadores en dos columnas (solo con una fecha de inicio)
-    symlog=False             # escala symlog: comprime los extremos (solo con una fecha de inicio)
+    symlog=False,            # escala symlog: comprime los extremos (solo con una fecha de inicio)
+    top_n=None,              # muestra solo los N mayores subas y las N mayores bajas (None/0 = todas; solo con una fecha)
+    show_breadth=False       # agrega al subtítulo "X de N en baja · Y en suba" (solo con una fecha)
 ):
     name_mapping = load_ticker_names(tickers_file) if tickers_file else {}
 
@@ -925,6 +927,22 @@ def run_performance(
     performance = calculate_performance(data, reference_prices)
     if performance.empty:
         return None
+
+    # Amplitud: se calcula con TODOS los activos, antes de recortar con top_n
+    n_total = int(performance.notna().sum())
+    n_up, n_down = int((performance > 0).sum()), int((performance < 0).sum())
+    extra = []
+    if top_n and int(top_n) > 0:
+        k = int(top_n)
+        pos = performance[performance >= 0].nlargest(k)
+        neg = performance[performance < 0].nsmallest(k)
+        if len(pos) + len(neg) < n_total:
+            performance = pd.concat([pos, neg]).sort_values(ascending=False)
+            extra.append(f"Se muestran los {k} mayores de cada lado")
+    if show_breadth and n_total:
+        extra.insert(0, f"{n_down} de {n_total} en baja · {n_up} en suba")
+    if extra:
+        subtitle = "\n".join([t for t in [(subtitle or "").strip(), *extra] if t])
 
     last_date_fetched = data.dropna(how='all').index[-1]
     real_end_str = last_date_fetched.strftime('%d/%m/%Y')
