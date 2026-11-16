@@ -777,6 +777,12 @@ elif tool == "Performance":
              "al resto. Solo con una sola fecha de inicio.",
     )
 
+    show_descriptions = st.checkbox(
+        "Mostrar descripciones junto al ticker", True,
+        help="Muestra, por ejemplo, 'XLK (Tecnología)' en lugar de 'XLK' (descripciones de config/ticker_groups.json). "
+             "Desactivalo si las etiquetas quedan muy largas.",
+    )
+
     subtitle = st.text_area(
         "Subtítulo / aclaración (opcional)",
         "",
@@ -823,7 +829,7 @@ elif tool == "Performance":
                 tickers,
                 period=period,
                 group_name=group_name,
-                tickers_file=TICKERGROUPSFILE,
+                tickers_file=TICKERGROUPSFILE if show_descriptions else None,
                 ccl_adjust=adjust_ccl,
                 custom_start_date=custom_start_date,  # ← NEW
                 orientation=orientation,
