@@ -337,7 +337,7 @@ def create_split_bar_plot(df, title, period_label, filename="performance_chart.p
                           textcoords='offset points', xytext=(4 if right else -4, 0), color=TEXT_COLOR,
                           fontweight='bold', zorder=5, annotation_clip=False)
             pairs.append((ax.annotate(name, fontsize=ticker_fs, **common),
-                          ax.annotate(f'{value:.1f}%', fontsize=label_fs, **common), right))
+                          ax.annotate(f'{value:+.1f}%', fontsize=label_fs, **common), right))
             values.append(value)
 
     ax.axvline(0, color=ZERO_LINE_COLOR, linewidth=1.5, alpha=0.8, linestyle='--', zorder=4)
@@ -488,7 +488,7 @@ def create_bar_plot(performance, title, period_label, name_mapping,
         common.update(textcoords='offset points', color=TEXT_COLOR, fontweight='bold',
                       zorder=5, annotation_clip=False)
         t_ann = ax.annotate(name, xytext=start, fontsize=ticker_fs, **common)
-        v_ann = ax.annotate(f'{value:.1f}%', xytext=start, fontsize=label_fs, **common)
+        v_ann = ax.annotate(f'{value:+.1f}%', xytext=start, fontsize=label_fs, **common)
         pairs.append((t_ann, v_ann, positive))
 
     # ---------- Línea del cero, grilla y ejes ----------
@@ -657,19 +657,19 @@ def create_dual_bar_plot(perf_df, title, period_label, name_mapping, series_labe
         if paired:
             if a_ok:
                 groups.append(dict(y=i - 0.2, positive=a >= 0, anchor=a,
-                                   parts=[ticker_part, (f'{a:.1f}%', TEXT_COLOR, value_fs)] + tag_part(0)))
+                                   parts=[ticker_part, (f'{a:+.1f}%', TEXT_COLOR, value_fs)] + tag_part(0)))
             if b_ok:
                 # el ticker también acompaña a B (un poco más tenue), así cada barra se identifica sola
-                parts = [(nm, TICK_COLOR, ticker_fs), (f'{b:.1f}%', TEXT_COLOR, value_fs)] + tag_part(1)
+                parts = [(nm, TICK_COLOR, ticker_fs), (f'{b:+.1f}%', TEXT_COLOR, value_fs)] + tag_part(1)
                 groups.append(dict(y=i + 0.2, positive=b >= 0, anchor=b, parts=parts))
         else:
             ticker_side = (a >= 0) if a_ok else (b >= 0)
             for side in (True, False):
                 members = []
                 if a_ok and (a >= 0) == side:
-                    members.append((a, (f'{a:.1f}%', _lighten(cmap(norm(a)), 0.45), value_fs)))   # valor de A: tono de su barra, aclarado
+                    members.append((a, (f'{a:+.1f}%', _lighten(cmap(norm(a)), 0.45), value_fs)))   # valor de A: tono de su barra, aclarado
                 if b_ok and (b >= 0) == side:
-                    members.append((b, (f'{b:.1f}%', '#ffffff', value_fs)))      # valor de B, blanco
+                    members.append((b, (f'{b:+.1f}%', '#ffffff', value_fs)))      # valor de B, blanco
                 if not members:
                     continue
                 parts = [p for _, p in members]
