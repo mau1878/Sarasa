@@ -426,7 +426,7 @@
         "BAP": "BAP (Per)"
     },
     "ETFs LatAm": {
-        "EWZ": "EWZ (Brazil)",
+        "EWZ": "EWZ (Brasil)",
         "EWW": "EWW (Mexico)",
         "ILF": "ILF (LatAm)",
         "ARGT": "ARGT (Argentina)",
@@ -435,7 +435,7 @@
         "PERU": "PERU (Peru)"
     },
     "ETFs LatAm": {
-        "EWZ": "EWZ (Brazil)",
+        "EWZ": "EWZ (Brasil)",
         "EWW": "EWW (Mexico)",
         "ILF": "ILF (LatAm)",
         "ARGT": "ARGT (Argentina)",
@@ -449,8 +449,8 @@
     "BITF": "BITF",
     "HUT": "HUT",
     "MSTR": "MSTR",
-    "IBIT": "IBIT",
-    "ETHA": "ETHA",
+    "IBIT": "IBIT (Bitcoin)",
+    "ETHA": "ETHA (Ethereum)",
     "BTC-USD": "BTC-USD",
     "ETH-USD": "ETH-USD"
     }
