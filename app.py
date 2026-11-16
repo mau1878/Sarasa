@@ -783,6 +783,17 @@ elif tool == "Performance":
              "Desactivalo si las etiquetas quedan muy largas.",
     )
 
+    col_br, col_top = st.columns(2)
+    show_breadth = col_br.checkbox(
+        "Línea de amplitud en el subtítulo", False,
+        help="Agrega 'X de N en baja · Y en suba', calculado con todos los activos. Solo con una sola fecha de inicio.",
+    )
+    max_bars_side = col_top.number_input(
+        "Máx. barras por lado (0 = todas)", min_value=0, value=0, step=5,
+        help="Muestra solo las N mayores subas y las N mayores bajas. Se aclara en el subtítulo. "
+             "Solo con una sola fecha de inicio.",
+    )
+
     subtitle = st.text_area(
         "Subtítulo / aclaración (opcional)",
         "",
@@ -816,7 +827,7 @@ elif tool == "Performance":
             # Si performance_plot.py desplegado es una versión anterior a este app.py, avisar en claro
             # (en vez de un TypeError) y no dibujar: un gráfico sin la 2.ª fecha podría publicarse por error.
             import inspect
-            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style", "compare_periods", "two_columns", "symlog"]
+            _needed = ["orientation", "subtitle", "custom_start_date_2", "label_a", "label_b", "sort_by", "dual_style", "compare_periods", "two_columns", "symlog", "top_n", "show_breadth"]
             _missing = [k for k in _needed if k not in inspect.signature(run_performance).parameters]
             if _missing:
                 st.error(
@@ -841,7 +852,9 @@ elif tool == "Performance":
                 dual_style=dual_style,
                 compare_periods=quick_pair,
                 two_columns=two_columns,
-                symlog=symlog
+                symlog=symlog,
+                top_n=int(max_bars_side) or None,
+                show_breadth=show_breadth
             )
             if path and os.path.exists(path):
                 st.image(path, width="stretch")
