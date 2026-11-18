@@ -70,7 +70,7 @@ def _label_fontsize(n_lines, max_size=18, min_size=9):
     return float(np.clip(21 - 0.55 * n_lines, min_size, max_size))
 
 
-def _spread_labels(fig, ax, texts, min_gap_scale=1.2):
+def _spread_labels(fig, ax, texts, min_gap_scale=1.2, relayout=True):
     """
     Separa verticalmente las etiquetas finales para que no se pisen, conservando el orden por altura
     y quedando lo más cerca posible de la posición real de cada línea. Mide en píxeles, así que
@@ -79,11 +79,18 @@ def _spread_labels(fig, ax, texts, min_gap_scale=1.2):
     if len(texts) < 2:
         return
     try:
-        fig.tight_layout()  # layout provisorio para conocer el alto real del eje
+        if relayout:
+            fig.tight_layout()  # layout provisorio para conocer el alto real del eje
+        fig.canvas.draw()
+        rend = fig.canvas.get_renderer()
         y0, y1 = ax.get_ylim()
-        k = ax.get_window_extent().height / (y1 - y0)          # píxeles por unidad de dato
+        k = ax.get_window_extent(rend).height / (y1 - y0)      # píxeles por unidad de dato
         ys = np.array([t.get_position()[1] for t in texts], dtype=float)
-        hs = np.array([t.get_fontsize() * fig.dpi / 72 * min_gap_scale for t in texts])
+        # Alto REAL de cada etiqueta (con la tipografía en uso) + margen; nunca menos que la estimación por tamaño
+        est = np.array([t.get_fontsize() * fig.dpi / 72 * min_gap_scale for t in texts])
+        real = np.array([t.get_window_extent(rend).height for t in texts]) + 0.25 * np.array(
+            [t.get_fontsize() * fig.dpi / 72 for t in texts])
+        hs = np.maximum(est, real)
         below = np.array([getattr(t, '_extra_below', 0.0) for t in texts])   # texto extra colgando debajo
         order = np.argsort(ys)
         pos = ys[order] * k
@@ -790,27 +797,6 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
         txt.set_gid(ticker)
         texts.append(txt)
 
-    _spread_labels(fig, ax, texts)
-
-    for txt in texts:
-        ticker = txt.get_gid()
-        target_x, target_y = line_ends[ticker]
-        label_x, label_y = txt.get_position()
-        color = txt.get_color()
-        if ticker in hl and ticker in peak_info and peak_info[ticker][0] != n_points - 1:
-            drop = returns[ticker].iloc[-1] - peak_info[ticker][1]
-            ax.annotate(f"{drop:+.1f} pp vs pico", xy=(label_x, label_y), xycoords='data',
-                        xytext=(6, -(label_fs * 1.15 * 0.95)), textcoords='offset points',
-                        ha='left', va='top', fontsize=max(10, label_fs * 0.72), fontweight='bold',
-                        color=color, zorder=6)
-        ax.annotate('',
-                    xy=(target_x, target_y),
-                    xytext=(label_x - 0.5, label_y),
-                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8,
-                                    alpha=0.8 if ticker in hl else 0.4,
-                                    shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
-                    zorder=3)
-
     # ---- Franjas de ranking: quién lideraba / quién iba último cada día ----
     if rank_strips:
         lead = list(returns.idxmax(axis=1))
@@ -842,6 +828,28 @@ def plot_returns_evolution(df, group_name, custom_title, period="YTD",
 
     plt.tight_layout()
     _avoid_title_overlap(fig, ax)
+    # Con el layout ya definitivo se separan las etiquetas (medidas en píxeles reales) y se dibujan los conectores
+    _spread_labels(fig, ax, texts, relayout=False)
+
+    for txt in texts:
+        ticker = txt.get_gid()
+        target_x, target_y = line_ends[ticker]
+        label_x, label_y = txt.get_position()
+        color = txt.get_color()
+        if ticker in hl and ticker in peak_info and peak_info[ticker][0] != n_points - 1:
+            drop = returns[ticker].iloc[-1] - peak_info[ticker][1]
+            ax.annotate(f"{drop:+.1f} pp vs pico", xy=(label_x, label_y), xycoords='data',
+                        xytext=(6, -(label_fs * 1.15 * 0.95)), textcoords='offset points',
+                        ha='left', va='top', fontsize=max(10, label_fs * 0.72), fontweight='bold',
+                        color=color, zorder=6)
+        ax.annotate('',
+                    xy=(target_x, target_y),
+                    xytext=(label_x - 0.5, label_y),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=0.8,
+                                    alpha=0.8 if ticker in hl else 0.4,
+                                    shrinkA=0, shrinkB=0, connectionstyle="arc3,rad=0"),
+                    zorder=3)
+
     if rank_strips:
         _label_strip_runs(fig, ax_lead, lead, color_of)
         _label_strip_runs(fig, ax_last, last, color_of)
