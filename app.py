@@ -42,6 +42,29 @@ import os
 st.set_page_config(page_title="MTaurus Charts", layout="wide")
 mtaurus_style.inject_streamlit_font(st)  # carga la tipografía en el navegador (gráficos plotly)
 
+# ---- Gráficos: imagen + enlace para abrirla en grande (útil en celular) ----
+# Requiere .streamlit/config.toml con [server] enableStaticServing = true (sirve ./static en /app/static/).
+import hashlib, shutil, glob
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+def show_chart(path):
+    st.image(path, width="stretch")
+    try:
+        if isinstance(path, str) and os.path.isfile(path):
+            os.makedirs(STATIC_DIR, exist_ok=True)
+            with open(path, "rb") as f:
+                h = hashlib.md5(f.read()).hexdigest()[:12]
+            name = f"chart_{h}{os.path.splitext(path)[1] or '.png'}"
+            dst = os.path.join(STATIC_DIR, name)
+            if not os.path.exists(dst):
+                shutil.copyfile(path, dst)
+            for old in sorted(glob.glob(os.path.join(STATIC_DIR, "chart_*")), key=os.path.getmtime, reverse=True)[30:]:
+                os.remove(old)   # solo se conservan los últimos 30
+            st.markdown(f'<a href="app/static/{name}" target="_blank" rel="noopener">🔍 Abrir en grande (pestaña nueva)</a>',
+                        unsafe_allow_html=True)
+    except Exception:
+        pass
+
 st.title("MTaurus – Chart Lab")
 
 tool = st.sidebar.selectbox(
@@ -528,7 +551,7 @@ if tool == "Evolución de retornos":
                 events=[l.strip() for l in events_str.splitlines() if l.strip()] or None,
             )
             if path:
-                st.image(path, width="stretch")
+                show_chart(path)
             else:
                 st.warning("No se pudo generar el gráfico.")
 elif tool == "Intradía":
@@ -628,7 +651,7 @@ elif tool == "Intradía":
                 prepost=prepost
             )
             if path and os.path.exists(path):
-                st.image(path, width="stretch")
+                show_chart(path)
             else:
                 st.warning("No se pudieron obtener datos para esa fecha (yfinance solo guarda ~7 días de 1m). Prueba con una fecha más reciente.")
 # ---- Top ruedas ----
@@ -675,7 +698,7 @@ elif tool == "Top ruedas":
                 return_table=True, sort_by_date=top_by_date,
             )
             if path and os.path.exists(path):
-                st.image(path, width="stretch")
+                show_chart(path)
                 with st.expander("Ver tabla"):
                     st.dataframe(table)
             else:
@@ -857,7 +880,7 @@ elif tool == "Performance":
                 show_breadth=show_breadth
             )
             if path and os.path.exists(path):
-                st.image(path, width="stretch")
+                show_chart(path)
             else:
                 st.warning("No se pudo generar el gráfico de performance.")
 
@@ -871,7 +894,7 @@ elif tool == "Drawdown":
     if st.button("Generar gráfico"):
         path = run_drawdown(ticker, start_year=start_year, from_last_ath=from_last_ath)
         if path:
-            st.image(path, width="stretch")
+            show_chart(path)
         else:
             st.warning("No se pudo generar el gráfico.")
 
@@ -955,9 +978,9 @@ elif tool == "Correlación":
                 inverse=inverse, min_block_size=corr_min_block,
             )
             if path:
-                st.image(path, width="stretch")
+                show_chart(path)
                 if corr_dendro and os.path.exists(DENDROGRAM_FILE):
-                    st.image(os.path.abspath(DENDROGRAM_FILE), width="stretch")
+                    show_chart(os.path.abspath(DENDROGRAM_FILE))
                 if corr_csv and os.path.exists(CLUSTERS_CSV_FILE):
                     with open(CLUSTERS_CSV_FILE, "rb") as _fh:
                         _csv_bytes = _fh.read()
@@ -1002,7 +1025,7 @@ elif tool == "Heatmap histórico":
             apply_ccl=apply_ccl,
         )
         if path:
-            st.image(path, width="stretch")
+            show_chart(path)
         else:
             st.warning("No se pudo generar el gráfico.")
 
@@ -1034,31 +1057,31 @@ elif tool == "Distribución (Histograma / Ranking / Rachas)":
         # 1) Línea de tiempo de variaciones por período
         line_path = run_period_line(ticker, analysis_period=analysis_period, **kwargs)
         if line_path:
-            st.image(line_path, width="stretch")
+            show_chart(line_path)
 
         # 2) Histograma + gaussiana
         hist_path = run_histogram(ticker, frequency=freq_label, **kwargs)
         if hist_path:
-            st.image(hist_path, width="stretch")
+            show_chart(hist_path)
         else:
             st.warning("No se pudo generar el histograma.")
 
         # 3) Cambios típicos (promedio o mediana) por mes/trimestre
         avg_path = run_average_changes(ticker, analysis_period=analysis_period, metric=metric, **kwargs)
         if avg_path:
-            st.image(avg_path, width="stretch")
+            show_chart(avg_path)
 
         # 4) Ranking mensual/trimestral (+ total de años, embebido)
         rank_path = run_period_ranking(ticker, analysis_period=analysis_period, **kwargs)
         if rank_path:
-            st.image(rank_path, width="stretch")
+            show_chart(rank_path)
         else:
             st.warning("No se pudo generar el ranking.")
 
         # 5) Ranking anual, separado (cantidad de meses/trimestres +/- por año)
         yearly_rank_path = run_yearly_ranking(ticker, analysis_period=analysis_period, **kwargs)
         if yearly_rank_path:
-            st.image(yearly_rank_path, width="stretch")
+            show_chart(yearly_rank_path)
 
         # 6) Estadísticas descriptivas
         stats = run_descriptive_stats(ticker, analysis_period=analysis_period, **kwargs)
@@ -1071,7 +1094,7 @@ elif tool == "Distribución (Histograma / Ranking / Rachas)":
         # 7) Drawdown — reutiliza el módulo ya existente (mismo enfoque, sin duplicar)
         dd_path = run_drawdown(ticker, start_year=int(start_year) if start_year else None)
         if dd_path:
-            st.image(dd_path, width="stretch")
+            show_chart(dd_path)
 
         # 8) Rachas (tabular)
         with st.expander("📊 Análisis de rachas"):
@@ -1112,9 +1135,9 @@ elif tool == "Precio ajustado por inflación":
             st.markdown("**Versión Matplotlib (más liviana para celular):**")
             col1, col2 = st.columns(2)
             with col1:
-                st.image(path_lineal, width="stretch")
+                show_chart(path_lineal)
             with col2:
-                st.image(path_log, width="stretch")
+                show_chart(path_log)
 
 
 # ---- Calculadora de Inflación Histórica ----
