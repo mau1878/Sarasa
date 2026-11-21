@@ -672,6 +672,8 @@ elif tool == "Top ruedas":
     if top_signed:
         _modos = {"Mayor magnitud (sube o baja)": "abs", "Mayores subas": "up", "Mayores bajas": "down"}
         top_mode = _modos[st.radio("Orden", list(_modos.keys()), horizontal=True)]
+    top_freq_lbl = st.radio("Frecuencia", ["Diaria (ruedas)", "Semanal (semanas)"], horizontal=True)
+    top_freq = "W" if top_freq_lbl.startswith("Semanal") else "D"
     top_custom = st.checkbox("Usar rango de fechas personalizado", False)
     top_start = top_end = None
     if top_custom:
@@ -682,6 +684,27 @@ elif tool == "Top ruedas":
         with dcol2:
             top_end = st.date_input("Hasta", value=datetime.now().date(),
                                     min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date())
+    top_hl = st.checkbox("Destacar con otro color las ruedas de un rango de fechas", False)
+    top_hl_start = top_hl_end = None
+    if top_hl:
+        hcol1, hcol2 = st.columns(2)
+        with hcol1:
+            top_hl_start = st.date_input("Destacar desde", value=datetime(datetime.now().year, 1, 1).date(),
+                                         min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date(),
+                                         key="top_hl_start")
+        with hcol2:
+            top_hl_end = st.date_input("Destacar hasta", value=datetime.now().date(),
+                                       min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date(),
+                                       key="top_hl_end")
+    xcol1, xcol2 = st.columns(2)
+    with xcol1:
+        top_fwd = st.number_input(
+            "Mostrar retorno de los N períodos siguientes (0 = no)", min_value=0, max_value=60, value=0, step=1,
+            help="Agrega una columna con el retorno del cierre de la rueda al cierre N ruedas después "
+                 "(1 = la rueda siguiente). Queda en '–' si todavía no pasaron N ruedas.")
+    with xcol2:
+        top_grad = st.checkbox("Degradé por antigüedad", False,
+                               help="Las ruedas más recientes con el color más intenso y las más antiguas más tenues.")
     ocol1, ocol2 = st.columns(2)
     with ocol1:
         top_partial = st.checkbox("Incluir la rueda en curso (datos parciales)", False)
@@ -696,6 +719,9 @@ elif tool == "Top ruedas":
                 top_ticker, metric=top_metric, n=top_n, mode=top_mode, period=top_period,
                 start_date=top_start, end_date=top_end, include_partial=top_partial,
                 return_table=True, sort_by_date=top_by_date,
+                highlight_start=top_hl_start, highlight_end=top_hl_end,
+                fwd_sessions=int(top_fwd), recency_gradient=top_grad,
+                frequency=top_freq,
             )
             if path and os.path.exists(path):
                 show_chart(path)
