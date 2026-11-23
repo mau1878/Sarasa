@@ -675,6 +675,14 @@ elif tool == "Top ruedas":
         _keys,
         format_func=lambda k: TOP_METRICS[k][0],
     )
+    top_basis = "hlc3"
+    if top_metric == "volumen_nominal":
+        top_basis = st.selectbox(
+            "Precio para el volumen en dinero", ["hlc3", "ohlc4", "close"],
+            format_func=lambda k: {"hlc3": "Típico (H+L+C)/3 × volumen", "ohlc4": "(O+H+L+C)/4 × volumen",
+                                   "close": "Cierre × volumen"}[k],
+            help="Con datos diarios el VWAP exacto no se puede calcular; esto es una aproximación. "
+                 "El cierre × volumen es la más sesgada.")
     top_signed = TOP_METRICS[top_metric][1]
     tcol1, tcol2 = st.columns(2)
     with tcol1:
@@ -741,6 +749,7 @@ elif tool == "Top ruedas":
                 frequency=top_freq,
                 ticker2=top_ticker2, factor=top_factor,
                 invert_colors=top_invert,
+                price_basis=top_basis,
             )
             if path and os.path.exists(path):
                 show_chart(path)
