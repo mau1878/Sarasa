@@ -656,10 +656,23 @@ elif tool == "Intradía":
                 st.warning("No se pudieron obtener datos para esa fecha (yfinance solo guarda ~7 días de 1m). Prueba con una fecha más reciente.")
 # ---- Top ruedas ----
 elif tool == "Top ruedas":
-    top_ticker = st.text_input("Ticker", "SPY")
+    top_ratio = st.radio("Instrumento", ["Un solo ticker", "Ratio entre dos tickers (A/B)"], horizontal=True).startswith("Ratio")
+    top_ticker2, top_factor = None, 1.0
+    if top_ratio:
+        rc1, rc2, rc3 = st.columns([2, 2, 1])
+        top_ticker = rc1.text_input("Ticker A (numerador)", "YPFD.BA")
+        top_ticker2 = rc2.text_input("Ticker B (denominador)", "YPF")
+        top_factor = rc3.number_input("Multiplicador", min_value=0.0001, value=1.0, step=1.0, format="%.4f",
+                                      help="Ajuste del ratio, p. ej. la cantidad de acciones por ADR. "
+                                           "Con YPFD.BA/YPF ×1 da el CCL implícito.")
+        st.caption("Solo se usan las ruedas en que hay datos de ambos instrumentos; 'vs rueda anterior' "
+                   "significa vs la rueda anterior en común.")
+    else:
+        top_ticker = st.text_input("Ticker", "SPY")
+    _keys = [k for k in TOP_METRICS if k.startswith("ratio_") == top_ratio]
     top_metric = st.selectbox(
         "Métrica",
-        list(TOP_METRICS.keys()),
+        _keys,
         format_func=lambda k: TOP_METRICS[k][0],
     )
     top_signed = TOP_METRICS[top_metric][1]
@@ -712,8 +725,8 @@ elif tool == "Top ruedas":
         top_by_date = st.checkbox("Ordenar por fecha (en vez de por valor)", False)
 
     if st.button("Generar gráfico"):
-        if not top_ticker.strip():
-            st.warning("Ingresá un ticker.")
+        if not top_ticker.strip() or (top_ratio and not (top_ticker2 or "").strip()):
+            st.warning("Ingresá los dos tickers." if top_ratio else "Ingresá un ticker.")
         else:
             path, table = run_top_days(
                 top_ticker, metric=top_metric, n=top_n, mode=top_mode, period=top_period,
@@ -722,6 +735,7 @@ elif tool == "Top ruedas":
                 highlight_start=top_hl_start, highlight_end=top_hl_end,
                 fwd_sessions=int(top_fwd), recency_gradient=top_grad,
                 frequency=top_freq,
+                ticker2=top_ticker2, factor=top_factor,
             )
             if path and os.path.exists(path):
                 show_chart(path)
