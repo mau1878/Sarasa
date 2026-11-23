@@ -39,10 +39,25 @@ DOWN_COLOR = '#ff5c6c'
 NEUTRAL_COLOR = '#40c0ff'
 HIGHLIGHT_COLOR = '#b78cff'   # barras cuya fecha cae dentro del rango a destacar
 
+# Precio usado para aproximar el volumen en dinero (el VWAP exacto requiere datos intradiarios)
+PRICE_BASIS = {
+    "hlc3": "(H+L+C)/3 × volumen",       # precio típico (por defecto)
+    "ohlc4": "(O+H+L+C)/4 × volumen",
+    "close": "cierre × volumen",
+}
+
+
+def _basis_price(df, basis="hlc3"):
+    if basis == "close":
+        return df["Close"]
+    if basis == "ohlc4":
+        return (df["Open"] + df["High"] + df["Low"] + df["Close"]) / 4
+    return (df["High"] + df["Low"] + df["Close"]) / 3
+
 # clave -> (etiqueta, tiene signo, columna calculada)
 METRICS = {
     "volumen": ("Volumen (acciones)", False, "Volumen"),
-    "volumen_nominal": ("Volumen nominal (precio × volumen)", False, "VolNominal"),
+    "volumen_nominal": ("Volumen nominal en dinero (aprox.)", False, "VolNominal"),
     "volumen_relativo": ("Volumen relativo (vs promedio de los 20 períodos previos)", False, "VolRel"),
     "rango": ("Rango máximo–mínimo (%)", False, "Rango"),
     "var_cierre_ant": ("Variación vs cierre anterior (%)", True, "VarCierre"),
@@ -57,7 +72,7 @@ METRICS = {
 # frase para el título según métrica y modo (descriptiva, sin conclusiones)
 _TITLE_PHRASE = {
     "volumen": "mayor volumen",
-    "volumen_nominal": "mayor volumen nominal",
+    "volumen_nominal": "mayor volumen nominal (aprox.)",
     "volumen_relativo": "mayor volumen relativo",
     "rango": "mayor rango máximo–mínimo",
     ("var_cierre_ant", "abs"): "mayor variación vs cierre anterior (absoluta)",
@@ -135,6 +150,8 @@ def _to_weekly(df, include_partial=False):
         "Close": g["Close"].last(), "Volume": g["Volume"].sum(min_count=1),
         "Desde": g["_d"].first(), "_fin": g["_d"].last(),
     })
+    if "Nominal" in d.columns:          # el volumen en dinero semanal es la suma de los diarios
+        w["Nominal"] = g["Nominal"].sum(min_count=1)
     w.index = pd.DatetimeIndex(w.pop("_fin"))
     if not include_partial and len(w):
         hoy = pd.Timestamp(pd.Timestamp.now(tz="America/New_York").date())
@@ -185,7 +202,7 @@ def compute_daily_metrics(df):
     prev_close = df["Close"].shift(1)
     vol = df["Volume"].where(df["Volume"] > 0)
     out["Volumen"] = vol
-    out["VolNominal"] = df["Close"] * vol
+    out["VolNominal"] = df["Nominal"].where(vol.notna()) if "Nominal" in df.columns else df["Close"] * vol
     out["VolRel"] = vol / vol.shift(1).rolling(20, min_periods=10).mean()
     out["Rango"] = (df["High"] / df["Low"] - 1) * 100
     out["VarCierre"] = (df["Close"] / prev_close - 1) * 100
@@ -199,7 +216,7 @@ def compute_daily_metrics(df):
 
 def top_days_table(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                    start_date=None, end_date=None, include_partial=False, frequency="D",
-                   ticker2=None, factor=1.0):
+                   ticker2=None, factor=1.0, price_basis="hlc3"):
     """Devuelve (tabla top N ordenada, métricas diarias del rango, df OHLCV) o (None, None, None)."""
     if metric not in METRICS:
         raise ValueError(f"Métrica desconocida: {metric}")
@@ -240,6 +257,8 @@ def top_days_table(ticker, metric="volumen", n=10, mode="abs", period="1Y",
             return None, None, None
         if not include_partial:
             df = _drop_partial_session(df)
+        # Volumen en dinero diario aproximado (precio base × volumen); en modo semanal se suma por semana
+        df["Nominal"] = _basis_price(df, price_basis) * df["Volume"].where(df["Volume"] > 0)
         if weekly:
             df = _to_weekly(df, include_partial)
         m = compute_daily_metrics(df)
@@ -333,7 +352,8 @@ def _fit_value_labels(fig, ax, texts, margin_frac=0.015, max_iter=6):
 
 def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="top_ruedas.png",
                   ref_value=None, sort_by_date=False, highlight_start=None, highlight_end=None,
-                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D", ratio_mode=False, invert_colors=False):
+                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D", ratio_mode=False, invert_colors=False,
+                  price_basis="hlc3"):
     # Código de colores: por defecto verde = suba / rojo = baja; con invert_colors se intercambian
     up_c, down_c = (DOWN_COLOR, UP_COLOR) if invert_colors else (UP_COLOR, DOWN_COLOR)
     weekly = str(frequency).upper().startswith("W")
@@ -489,6 +509,8 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
         phrase = phrase.replace("cierre anterior", "cierre semanal anterior")
     title = f"Top {k} {unit} por {phrase} — {ticker.upper()}"
     sub = f"{start:%d/%m/%Y} – {end:%d/%m/%Y} · {n_total} {unit}{' en común' if ratio_mode else ''} analizadas · {orden}"
+    if metric == "volumen_nominal":
+        sub += f" · $ = {PRICE_BASIS.get(price_basis, PRICE_BASIS['hlc3'])}"
     fig.suptitle(f"{title}\n{sub}", fontsize=20, color=TEXT_COLOR, fontweight="bold", y=0.985)
     fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=WATERMARK_COLOR,
              ha="center", va="center", rotation=30, zorder=999)
@@ -505,14 +527,15 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                  start_date=None, end_date=None, include_partial=False,
                  return_table=False, output_path="top_ruedas.png", sort_by_date=False,
                  highlight_start=None, highlight_end=None, fwd_sessions=0, recency_gradient=False,
-                 frequency="D", ticker2=None, factor=1.0, invert_colors=False):
+                 frequency="D", ticker2=None, factor=1.0, invert_colors=False,
+                 price_basis="hlc3"):
     ticker = ticker.strip().upper()
     ticker2 = ticker2.strip().upper() if ticker2 and ticker2.strip() else None
     ratio = bool(ticker2)
     factor = float(factor or 1.0)
     weekly = str(frequency).upper().startswith("W")
     top, m, df = top_days_table(ticker, metric, n, mode, period, start_date, end_date, include_partial, frequency,
-                                ticker2=ticker2, factor=factor)
+                                ticker2=ticker2, factor=factor, price_basis=price_basis)
     if top is None:
         return (None, None) if return_table else None
     label, signed, col = METRICS[metric]
@@ -536,7 +559,7 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                          ref_value=ref, sort_by_date=sort_by_date,
                          highlight_start=highlight_start, highlight_end=highlight_end,
                          fwd_ret=fwd_ret, fwd_label=fwd_label, recency_gradient=recency_gradient,
-                         frequency=frequency, ratio_mode=ratio, invert_colors=invert_colors)
+                         frequency=frequency, ratio_mode=ratio, invert_colors=invert_colors, price_basis=price_basis)
 
     if return_table:
         if ratio:
@@ -571,6 +594,8 @@ if __name__ == "__main__":
     parser.add_argument("--sort_by_date", action="store_true", help="Ordenar las barras por fecha en vez de por valor")
     parser.add_argument("--highlight_start", default=None, help="Destacar con otro color las ruedas desde esta fecha (YYYY-MM-DD)")
     parser.add_argument("--highlight_end", default=None, help="...hasta esta fecha (YYYY-MM-DD)")
+    parser.add_argument("--price_basis", default="hlc3", choices=list(PRICE_BASIS),
+                        help="Precio para aproximar el volumen en dinero: hlc3 (típico), ohlc4 o close")
     parser.add_argument("--invert_colors", action="store_true", help="Invertir colores: rojo = suba, verde = baja")
     parser.add_argument("--ticker2", default=None, help="Segundo instrumento: calcula el ratio TICKER/TICKER2 (métricas ratio_*)")
     parser.add_argument("--factor", type=float, default=1.0, help="Multiplicador del ratio (p. ej. ratio de conversión del ADR)")
@@ -583,6 +608,6 @@ if __name__ == "__main__":
                      highlight_start=args.highlight_start, highlight_end=args.highlight_end,
                      fwd_sessions=args.fwd_sessions, recency_gradient=args.recency_gradient,
                      frequency=args.frequency, ticker2=args.ticker2, factor=args.factor,
-                     invert_colors=args.invert_colors)
+                     invert_colors=args.invert_colors, price_basis=args.price_basis)
     if p:
         print(os.path.abspath(p))
