@@ -48,6 +48,10 @@ METRICS = {
     "var_cierre_ant": ("Variación vs cierre anterior (%)", True, "VarCierre"),
     "apertura_cierre": ("Distancia apertura → cierre (%)", True, "AperCierre"),
     "gap": ("Gap de apertura vs cierre anterior (%)", True, "Gap"),
+    # --- solo en modo ratio A/B (dos instrumentos, únicamente ruedas con datos de ambos) ---
+    "ratio_var": ("Variación del ratio vs rueda anterior en común (%)", True, "RatioVar"),
+    "ratio_desvio": ("Desvío del ratio vs su media de las 20 ruedas previas (%)", True, "RatioDesv"),
+    "ratio_nivel": ("Nivel del ratio", False, "RatioNivel"),
 }
 
 # frase para el título según métrica y modo (descriptiva, sin conclusiones)
@@ -65,6 +69,13 @@ _TITLE_PHRASE = {
     ("gap", "abs"): "mayor gap de apertura (absoluto)",
     ("gap", "up"): "mayores gaps alcistas de apertura",
     ("gap", "down"): "mayores gaps bajistas de apertura",
+    ("ratio_var", "abs"): "mayor variación del ratio vs rueda anterior en común (absoluta)",
+    ("ratio_var", "up"): "mayores subas del ratio vs rueda anterior en común",
+    ("ratio_var", "down"): "mayores bajas del ratio vs rueda anterior en común",
+    ("ratio_desvio", "abs"): "mayor desvío del ratio vs su media de 20 períodos (absoluto)",
+    ("ratio_desvio", "up"): "mayores desvíos al alza del ratio vs su media de 20 períodos",
+    ("ratio_desvio", "down"): "mayores desvíos a la baja del ratio vs su media de 20 períodos",
+    "ratio_nivel": "mayor nivel del ratio",
 }
 
 _DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
@@ -133,6 +144,42 @@ def _to_weekly(df, include_partial=False):
     return w
 
 
+def _to_weekly_pair(c, include_partial=False):
+    """Igual que _to_weekly pero para el par alineado (CierreA, CierreB, Close=ratio): usa el último cierre
+    COMÚN de cada semana (el ratio semanal sale de esos cierres)."""
+    d = c.copy()
+    d["_d"] = d.index
+    g = d.groupby(d.index.to_period("W-FRI"))
+    w = pd.DataFrame({"CierreA": g["CierreA"].last(), "CierreB": g["CierreB"].last(), "Close": g["Close"].last(),
+                      "Desde": g["_d"].first(), "_fin": g["_d"].last()})
+    w.index = pd.DatetimeIndex(w.pop("_fin"))
+    if not include_partial and len(w):
+        hoy = pd.Timestamp(pd.Timestamp.now(tz="America/New_York").date())
+        viernes = w.index[-1].normalize() + pd.Timedelta(days=4 - w.index[-1].weekday())
+        if w.index[-1].weekday() < 4 and hoy <= viernes:
+            w = w.iloc[:-1]
+    return w
+
+
+def compute_ratio_metrics(c):
+    """c: DataFrame con CierreA, CierreB y Close (= factor × A / B), solo períodos con datos de ambos."""
+    out = pd.DataFrame(index=c.index)
+    r = c["Close"]
+    prev = r.shift(1)                                   # cierre anterior EN COMÚN
+    for col in ("Volumen", "VolNominal", "VolRel", "Rango", "AperCierre", "Gap"):
+        out[col] = np.nan
+    out["RatioNivel"] = r
+    out["RatioVar"] = (r / prev - 1) * 100
+    out["RatioDesv"] = (r / prev.rolling(20, min_periods=10).mean() - 1) * 100
+    out["VarCierre"] = out["RatioVar"]                  # sentido del día (colores / columna contextual)
+    out["Cierre"] = r
+    out["CierreA"] = c["CierreA"]
+    out["CierreB"] = c["CierreB"]
+    if "Desde" in c.columns:
+        out["Desde"] = c["Desde"]
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
 def compute_daily_metrics(df):
     out = pd.DataFrame(index=df.index)
     prev_close = df["Close"].shift(1)
@@ -151,7 +198,8 @@ def compute_daily_metrics(df):
 
 
 def top_days_table(ticker, metric="volumen", n=10, mode="abs", period="1Y",
-                   start_date=None, end_date=None, include_partial=False, frequency="D"):
+                   start_date=None, end_date=None, include_partial=False, frequency="D",
+                   ticker2=None, factor=1.0):
     """Devuelve (tabla top N ordenada, métricas diarias del rango, df OHLCV) o (None, None, None)."""
     if metric not in METRICS:
         raise ValueError(f"Métrica desconocida: {metric}")
@@ -162,16 +210,39 @@ def top_days_table(ticker, metric="volumen", n=10, mode="abs", period="1Y",
     weekly = str(frequency).upper().startswith("W")
     buffer_start = start - pd.Timedelta(days=170 if weekly else 45)  # cierre anterior y promedio de 20 períodos
 
-    df = fetch_ohlcv(ticker, buffer_start, end)
-    if df.empty:
-        print(f"AVISO: sin datos para {ticker}")
-        return None, None, None
-    if not include_partial:
-        df = _drop_partial_session(df)
-
-    if weekly:
-        df = _to_weekly(df, include_partial)
-    m = compute_daily_metrics(df)
+    if ticker2:
+        if not metric.startswith("ratio_"):
+            raise ValueError("En modo ratio hay que elegir una métrica ratio_*")
+        dfa, dfb = fetch_ohlcv(ticker, buffer_start, end), fetch_ohlcv(ticker2, buffer_start, end)
+        for tk, d_ in ((ticker, dfa), (ticker2, dfb)):
+            if d_.empty:
+                print(f"AVISO: sin datos para {tk}")
+                return None, None, None
+        if not include_partial:
+            dfa, dfb = _drop_partial_session(dfa), _drop_partial_session(dfb)
+        for d_ in (dfa, dfb):
+            d_.index = d_.index.normalize()
+        # Solo ruedas con datos en AMBOS instrumentos
+        df = pd.DataFrame({"CierreA": dfa["Close"], "CierreB": dfb["Close"]}).dropna()
+        if df.empty:
+            print(f"AVISO: {ticker} y {ticker2} no tienen ruedas en común en ese rango")
+            return None, None, None
+        df["Close"] = float(factor) * df["CierreA"] / df["CierreB"]
+        if weekly:
+            df = _to_weekly_pair(df, include_partial)
+        m = compute_ratio_metrics(df)
+    else:
+        if metric.startswith("ratio_"):
+            raise ValueError("Las métricas ratio_* requieren un segundo ticker")
+        df = fetch_ohlcv(ticker, buffer_start, end)
+        if df.empty:
+            print(f"AVISO: sin datos para {ticker}")
+            return None, None, None
+        if not include_partial:
+            df = _drop_partial_session(df)
+        if weekly:
+            df = _to_weekly(df, include_partial)
+        m = compute_daily_metrics(df)
     m = m[(m.index >= start) & (m.index <= end + pd.Timedelta(days=1))]
     series = m[col].dropna()
     if series.empty:
@@ -224,6 +295,9 @@ def _fmt_value(metric, v):
         return f"×{v:.2f}"
     if metric == "rango":
         return f"{v:.2f}%"
+    if metric == "ratio_nivel":
+        a = abs(v)
+        return f"{v:.0f}" if a >= 100 else f"{v:.1f}" if a >= 10 else f"{v:.3f}"   # sin separador de miles
     return f"{v:+.2f}%"
 
 
@@ -238,7 +312,7 @@ MUTED = '#9a9ac0'
 
 def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="top_ruedas.png",
                   ref_value=None, sort_by_date=False, highlight_start=None, highlight_end=None,
-                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D"):
+                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D", ratio_mode=False):
     weekly = str(frequency).upper().startswith("W")
     unit, unit1 = ("semanas", "semana") if weekly else ("ruedas", "rueda")
     label, signed, col = METRICS[metric]
@@ -292,7 +366,10 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
                 fontsize=15, fontweight="bold", color="#ffffff", zorder=5)
 
     # Columna de contexto fuera del área de barras, con encabezado y color según signo
-    if signed:
+    if signed and ratio_mode:
+        head = "Ratio"
+        ctx = [(_fmt_value("ratio_nivel", r["Cierre"]) if pd.notna(r["Cierre"]) else "–", MUTED) for _, r in top.iterrows()]
+    elif signed:
         head = "Volumen"
         ctx = [(_fmt_big(r["Volumen"]) if pd.notna(r["Volumen"]) else "–", MUTED) for _, r in top.iterrows()]
     else:
@@ -352,6 +429,8 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: pre + _fmt_axis(v)))
     elif metric == "volumen_relativo":
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"×{v:g}"))
+    elif metric == "ratio_nivel":
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
     else:
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}%"))
 
@@ -367,8 +446,17 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
         from matplotlib.lines import Line2D
         handles.append(Line2D([], [], color="none", label="Más reciente = color más intenso"))
     if handles:
-        leg = ax.legend(handles=handles, loc="lower right" if not signed else "best",
-                        frameon=False, fontsize=11, labelcolor=TEXT_COLOR)
+        below = False
+        if not signed and k >= 3:
+            # Si las barras de abajo llegan cerca del borde derecho, la leyenda se pasa debajo del eje
+            xl, xr = ax.get_xlim()
+            below = bool((np.nanmax(vals[-3:]) - xl) / ((xr - xl) or 1) > 0.62)
+        if below:
+            leg = ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.07), ncol=len(handles),
+                            frameon=False, fontsize=11, labelcolor=TEXT_COLOR)
+        else:
+            leg = ax.legend(handles=handles, loc="lower right" if not signed else "best",
+                            frameon=False, fontsize=11, labelcolor=TEXT_COLOR)
         leg.set_zorder(6)
 
     orden = "ordenadas por fecha" if sort_by_date else "ordenadas por valor"
@@ -376,7 +464,7 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
     if weekly:
         phrase = phrase.replace("cierre anterior", "cierre semanal anterior")
     title = f"Top {k} {unit} por {phrase} — {ticker.upper()}"
-    sub = f"{start:%d/%m/%Y} – {end:%d/%m/%Y} · {n_total} {unit} analizadas · {orden}"
+    sub = f"{start:%d/%m/%Y} – {end:%d/%m/%Y} · {n_total} {unit}{' en común' if ratio_mode else ''} analizadas · {orden}"
     fig.suptitle(f"{title}\n{sub}", fontsize=20, color=TEXT_COLOR, fontweight="bold", y=0.985)
     fig.text(0.5, 0.5, "@MTaurus_ok", fontsize=90, color=WATERMARK_COLOR,
              ha="center", va="center", rotation=30, zorder=999)
@@ -392,10 +480,14 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                  start_date=None, end_date=None, include_partial=False,
                  return_table=False, output_path="top_ruedas.png", sort_by_date=False,
                  highlight_start=None, highlight_end=None, fwd_sessions=0, recency_gradient=False,
-                 frequency="D"):
+                 frequency="D", ticker2=None, factor=1.0):
     ticker = ticker.strip().upper()
+    ticker2 = ticker2.strip().upper() if ticker2 and ticker2.strip() else None
+    ratio = bool(ticker2)
+    factor = float(factor or 1.0)
     weekly = str(frequency).upper().startswith("W")
-    top, m, df = top_days_table(ticker, metric, n, mode, period, start_date, end_date, include_partial, frequency)
+    top, m, df = top_days_table(ticker, metric, n, mode, period, start_date, end_date, include_partial, frequency,
+                                ticker2=ticker2, factor=factor)
     if top is None:
         return (None, None) if return_table else None
     label, signed, col = METRICS[metric]
@@ -412,20 +504,30 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
             fwd_label = "Semana siguiente" if k_fwd == 1 else f"A {k_fwd} semanas"
         else:
             fwd_label = "Rueda siguiente" if k_fwd == 1 else f"A {k_fwd} ruedas"
-    path = plot_top_days(top, ticker, metric, mode if signed else "abs", n_total, start, end, output_path,
+        if ratio:
+            fwd_label = "Ratio: " + fwd_label[0].lower() + fwd_label[1:]
+    tk_label = f"{ticker}/{ticker2}" + (f" ×{factor:g}" if ratio and factor != 1 else "") if ratio else ticker
+    path = plot_top_days(top, tk_label, metric, mode if signed else "abs", n_total, start, end, output_path,
                          ref_value=ref, sort_by_date=sort_by_date,
                          highlight_start=highlight_start, highlight_end=highlight_end,
                          fwd_ret=fwd_ret, fwd_label=fwd_label, recency_gradient=recency_gradient,
-                         frequency=frequency)
+                         frequency=frequency, ratio_mode=ratio)
 
     if return_table:
-        table = top[["Valor", "Cierre", "VarCierre", "Volumen", "Rango", "AperCierre", "Gap"]].copy()
+        if ratio:
+            table = top[["Valor", "Cierre", "VarCierre", "CierreA", "CierreB"]].copy()
+        else:
+            table = top[["Valor", "Cierre", "VarCierre", "Volumen", "Rango", "AperCierre", "Gap"]].copy()
         if fwd_ret is not None:
             table[fwd_label] = [fwd_ret.get(d, np.nan) for d in top.index]
         table.index = table.index.strftime("%d/%m/%Y")
         table.index.name = "Fecha (fin de semana)" if weekly else "Fecha"
-        table.columns = [label, "Cierre", "Var. vs cierre ant. (%)", "Volumen", "Rango máx–mín (%)",
-                         "Apertura→Cierre (%)", "Gap apertura (%)"] + ([f"{fwd_label} (%)"] if fwd_ret is not None else [])
+        if ratio:
+            cols = [label, "Ratio", "Var. del ratio (%)", f"Cierre {ticker}", f"Cierre {ticker2}"]
+        else:
+            cols = [label, "Cierre", "Var. vs cierre ant. (%)", "Volumen", "Rango máx–mín (%)",
+                    "Apertura→Cierre (%)", "Gap apertura (%)"]
+        table.columns = cols + ([f"{fwd_label} (%)"] if fwd_ret is not None else [])
         return path, table
     return path
 
@@ -444,6 +546,8 @@ if __name__ == "__main__":
     parser.add_argument("--sort_by_date", action="store_true", help="Ordenar las barras por fecha en vez de por valor")
     parser.add_argument("--highlight_start", default=None, help="Destacar con otro color las ruedas desde esta fecha (YYYY-MM-DD)")
     parser.add_argument("--highlight_end", default=None, help="...hasta esta fecha (YYYY-MM-DD)")
+    parser.add_argument("--ticker2", default=None, help="Segundo instrumento: calcula el ratio TICKER/TICKER2 (métricas ratio_*)")
+    parser.add_argument("--factor", type=float, default=1.0, help="Multiplicador del ratio (p. ej. ratio de conversión del ADR)")
     parser.add_argument("--frequency", default="D", choices=["D", "W"], help="D = ruedas diarias, W = semanas")
     parser.add_argument("--fwd_sessions", type=int, default=0, help="Mostrar el retorno de las N ruedas siguientes (0 = no)")
     parser.add_argument("--recency_gradient", action="store_true", help="Degradé: más reciente = color más intenso")
@@ -452,6 +556,6 @@ if __name__ == "__main__":
                      args.start, args.end, args.include_partial, sort_by_date=args.sort_by_date,
                      highlight_start=args.highlight_start, highlight_end=args.highlight_end,
                      fwd_sessions=args.fwd_sessions, recency_gradient=args.recency_gradient,
-                     frequency=args.frequency)
+                     frequency=args.frequency, ticker2=args.ticker2, factor=args.factor)
     if p:
         print(os.path.abspath(p))
