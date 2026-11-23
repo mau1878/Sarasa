@@ -709,6 +709,10 @@ elif tool == "Top ruedas":
             top_hl_end = st.date_input("Destacar hasta", value=datetime.now().date(),
                                        min_value=datetime(1950, 1, 1).date(), max_value=datetime.now().date(),
                                        key="top_hl_end")
+    top_color = st.radio(
+        "Código de colores", ["Verde = suba · Rojo = baja", "Rojo = suba · Verde = baja (invertido)"], horizontal=True,
+        help="El invertido sirve cuando una suba es 'mala', por ejemplo el CCL implícito o un ratio de tipo de cambio.")
+    top_invert = top_color.startswith("Rojo")
     xcol1, xcol2 = st.columns(2)
     with xcol1:
         top_fwd = st.number_input(
@@ -736,6 +740,7 @@ elif tool == "Top ruedas":
                 fwd_sessions=int(top_fwd), recency_gradient=top_grad,
                 frequency=top_freq,
                 ticker2=top_ticker2, factor=top_factor,
+                invert_colors=top_invert,
             )
             if path and os.path.exists(path):
                 show_chart(path)
