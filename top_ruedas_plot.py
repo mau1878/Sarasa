@@ -310,9 +310,32 @@ GOLD = '#ffd166'
 MUTED = '#9a9ac0'
 
 
+def _fit_value_labels(fig, ax, texts, margin_frac=0.015, max_iter=6):
+    """Amplía los límites del eje X hasta que todas las etiquetas de valor (medidas en píxeles reales) queden
+    dentro del área del gráfico. Evita que un valor largo se superponga con las etiquetas de fecha."""
+    for _ in range(max_iter):
+        fig.canvas.draw()
+        rend = fig.canvas.get_renderer()
+        inv = ax.transData.inverted()
+        xs = []
+        for t in texts:
+            bb = t.get_window_extent(rend)
+            (x0, _y0), (x1, _y1) = inv.transform([(bb.x0, bb.y0), (bb.x1, bb.y1)])
+            xs += [x0, x1]
+        xl, xr = ax.get_xlim()
+        span = (xr - xl) or 1.0
+        new_l = min(xl, min(xs) - span * margin_frac)
+        new_r = max(xr, max(xs) + span * margin_frac)
+        if new_l >= xl - 1e-12 and new_r <= xr + 1e-12:
+            break
+        ax.set_xlim(new_l, new_r)
+
+
 def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="top_ruedas.png",
                   ref_value=None, sort_by_date=False, highlight_start=None, highlight_end=None,
-                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D", ratio_mode=False):
+                  fwd_ret=None, fwd_label=None, recency_gradient=False, frequency="D", ratio_mode=False, invert_colors=False):
+    # Código de colores: por defecto verde = suba / rojo = baja; con invert_colors se intercambian
+    up_c, down_c = (DOWN_COLOR, UP_COLOR) if invert_colors else (UP_COLOR, DOWN_COLOR)
     weekly = str(frequency).upper().startswith("W")
     unit, unit1 = ("semanas", "semana") if weekly else ("ruedas", "rueda")
     label, signed, col = METRICS[metric]
@@ -331,10 +354,10 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
 
     # Color de las barras: con signo -> según el valor; volumen/rango -> según el sentido de la rueda
     if signed:
-        colors = [UP_COLOR if v >= 0 else DOWN_COLOR for v in vals]
+        colors = [up_c if v >= 0 else down_c for v in vals]
     else:
         vc = top["VarCierre"].values
-        colors = [NEUTRAL_COLOR if pd.isna(v) else (UP_COLOR if v >= 0 else DOWN_COLOR) for v in vc]
+        colors = [NEUTRAL_COLOR if pd.isna(v) else (up_c if v >= 0 else down_c) for v in vc]
     # Destacar con otro color las ruedas cuya fecha cae dentro de [highlight_start, highlight_end]
     n_hl, hl_label = 0, None
     if highlight_start is not None or highlight_end is not None:
@@ -359,11 +382,12 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
     lo, hi = np.nanmin(vals), np.nanmax(vals)
     span = max(abs(lo), abs(hi)) or 1
     pad = span * 0.012
+    val_texts = []
     for yi, (dt, row) in zip(y, top.iterrows()):
         v = row["Valor"]
-        ax.text(v + (pad if v >= 0 else -pad), yi, _fmt_value(metric, v),
+        val_texts.append(ax.text(v + (pad if v >= 0 else -pad), yi, _fmt_value(metric, v),
                 va="center", ha="left" if v >= 0 else "right",
-                fontsize=15, fontweight="bold", color="#ffffff", zorder=5)
+                fontsize=15, fontweight="bold", color="#ffffff", zorder=5))
 
     # Columna de contexto fuera del área de barras, con encabezado y color según signo
     if signed and ratio_mode:
@@ -377,7 +401,7 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
         ctx = []
         for _, r in top.iterrows():
             v = r["VarCierre"]
-            ctx.append(("–", MUTED) if pd.isna(v) else (f"{v:+.2f}%", UP_COLOR if v >= 0 else DOWN_COLOR))
+            ctx.append(("–", MUTED) if pd.isna(v) else (f"{v:+.2f}%", up_c if v >= 0 else down_c))
     ax.text(1.015, 1.0 + 0.012, head, transform=ax.transAxes, ha="left", va="bottom",
             fontsize=12, color=MUTED, fontweight="bold")
     for yi, (txt, colr) in zip(y, ctx):
@@ -390,7 +414,7 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
                 fontsize=12, color=MUTED, fontweight="bold")
         for yi, (dt, _r) in zip(y, top.iterrows()):
             fv = fwd_ret.get(dt, np.nan)
-            txt, colr = ("–", MUTED) if pd.isna(fv) else (f"{fv:+.2f}%", UP_COLOR if fv >= 0 else DOWN_COLOR)
+            txt, colr = ("–", MUTED) if pd.isna(fv) else (f"{fv:+.2f}%", up_c if fv >= 0 else down_c)
             ax.text(1.115, yi, txt, transform=ax.get_yaxis_transform(), ha="left", va="center",
                     fontsize=14, fontweight="bold", color=colr, zorder=5)
 
@@ -438,8 +462,8 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
     from matplotlib.patches import Patch
     handles = []
     if not signed:
-        handles += [Patch(color=UP_COLOR, alpha=0.88, label=f"{unit1.capitalize()} con suba"),
-                    Patch(color=DOWN_COLOR, alpha=0.88, label=f"{unit1.capitalize()} con baja")]
+        handles += [Patch(color=up_c, alpha=0.88, label=f"{unit1.capitalize()} con suba"),
+                    Patch(color=down_c, alpha=0.88, label=f"{unit1.capitalize()} con baja")]
     if hl_label:
         handles.append(Patch(color=HIGHLIGHT_COLOR, alpha=0.88, label=hl_label))
     if recency_gradient and k > 1:
@@ -470,6 +494,7 @@ def plot_top_days(top, ticker, metric, mode, n_total, start, end, output_path="t
              ha="center", va="center", rotation=30, zorder=999)
 
     plt.tight_layout(rect=(0, 0, 1, 1))
+    _fit_value_labels(fig, ax, val_texts)       # que ninguna etiqueta de valor se pise con las del eje ni se corte
     plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor=PAPER_COLOR)
     plt.close(fig)
     return output_path
@@ -480,7 +505,7 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                  start_date=None, end_date=None, include_partial=False,
                  return_table=False, output_path="top_ruedas.png", sort_by_date=False,
                  highlight_start=None, highlight_end=None, fwd_sessions=0, recency_gradient=False,
-                 frequency="D", ticker2=None, factor=1.0):
+                 frequency="D", ticker2=None, factor=1.0, invert_colors=False):
     ticker = ticker.strip().upper()
     ticker2 = ticker2.strip().upper() if ticker2 and ticker2.strip() else None
     ratio = bool(ticker2)
@@ -511,7 +536,7 @@ def run_top_days(ticker, metric="volumen", n=10, mode="abs", period="1Y",
                          ref_value=ref, sort_by_date=sort_by_date,
                          highlight_start=highlight_start, highlight_end=highlight_end,
                          fwd_ret=fwd_ret, fwd_label=fwd_label, recency_gradient=recency_gradient,
-                         frequency=frequency, ratio_mode=ratio)
+                         frequency=frequency, ratio_mode=ratio, invert_colors=invert_colors)
 
     if return_table:
         if ratio:
@@ -546,6 +571,7 @@ if __name__ == "__main__":
     parser.add_argument("--sort_by_date", action="store_true", help="Ordenar las barras por fecha en vez de por valor")
     parser.add_argument("--highlight_start", default=None, help="Destacar con otro color las ruedas desde esta fecha (YYYY-MM-DD)")
     parser.add_argument("--highlight_end", default=None, help="...hasta esta fecha (YYYY-MM-DD)")
+    parser.add_argument("--invert_colors", action="store_true", help="Invertir colores: rojo = suba, verde = baja")
     parser.add_argument("--ticker2", default=None, help="Segundo instrumento: calcula el ratio TICKER/TICKER2 (métricas ratio_*)")
     parser.add_argument("--factor", type=float, default=1.0, help="Multiplicador del ratio (p. ej. ratio de conversión del ADR)")
     parser.add_argument("--frequency", default="D", choices=["D", "W"], help="D = ruedas diarias, W = semanas")
@@ -556,6 +582,7 @@ if __name__ == "__main__":
                      args.start, args.end, args.include_partial, sort_by_date=args.sort_by_date,
                      highlight_start=args.highlight_start, highlight_end=args.highlight_end,
                      fwd_sessions=args.fwd_sessions, recency_gradient=args.recency_gradient,
-                     frequency=args.frequency, ticker2=args.ticker2, factor=args.factor)
+                     frequency=args.frequency, ticker2=args.ticker2, factor=args.factor,
+                     invert_colors=args.invert_colors)
     if p:
         print(os.path.abspath(p))
